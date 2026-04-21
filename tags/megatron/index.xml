@@ -8,7 +8,13 @@
 &lt;/h3&gt;&lt;p&gt;基于Python+PyTorch，依赖NCCL+TransformerEngine（NVIDIA的混合精度库）+CUDA/C++开发和运行。&lt;/p&gt;
 &lt;p&gt;核心分为两部分：Megatron-LM是包含训练脚本的参考实现，Megatron Core是可复用的组件库。前者包括了预训练脚本、模型定义、数据处理流程，后者提供transformer building blocks、并行策略的封装、混合精度管理等等功能。也因此，许多（实际上是大部分）第三方框架可以（且选择）直接依赖Megatron Core而不用整个 Megatron-LM，例子包括了NeMo、veRL等著名后训练框架。&lt;/p&gt;
 &lt;h3 id="特性"&gt;特性
-&lt;/h3&gt;&lt;h2 id="deepspeedmicrosoft"&gt;DeepSpeed（Microsoft）
+&lt;/h3&gt;&lt;p&gt;字面意义上的在预训练这块大而全。&lt;/p&gt;
+&lt;p&gt;并行策略方面：TP（Column/Row Parallel，定义了行业标准）、PP（1F1B+Interleaved 1F1B）、DP、SP、CP、EP（包括Parallel Folding）。&lt;/p&gt;
+&lt;p&gt;混合精度方面：FP16、BF16、FP8（通过TransformerEngine）、FP4。&lt;/p&gt;
+&lt;p&gt;显存优化方面：Activation Checkpointing（full+selective recomputation）、Distributed Optimizer（ZeRO-1级别）。&lt;/p&gt;
+&lt;p&gt;工程基建方面：分布式Checkpoint（支持不同并行拓扑间的resharding）、和HuggingFace的checkpoint互相转换（Megatron Bridge）。&lt;/p&gt;
+&lt;p&gt;缺点在于Zero Bubble调度不是原生内置的。后训练能力本身不提供（SFT/RLHF由NeMo-Aligner/NeMo-RL等后训练框架承接）。ZeRO-2/3级别的参数和梯度sharding不是Megatron原生的（其原生Distributed Optimizer只做ZeRO-1，更深的sharding需要和 DeepSpeed 结合）。对非NVIDIA硬件基本不可用。文档不够完善，很多高级功能需要读源码才能理解。&lt;/p&gt;
+&lt;h2 id="deepspeedmicrosoft"&gt;DeepSpeed（Microsoft）
 &lt;/h2&gt;&lt;p&gt;以ZeRO系列优化为核心，通过最小代码改动让PyTorch模型实现大规模训练的库。&lt;/p&gt;
 &lt;h3 id="定位-1"&gt;定位
 &lt;/h3&gt;&lt;p&gt;面向不想大幅改动模型代码但需要训练大模型的团队。核心卖点是低侵入性，通过修改配置而不是代码本身就能启用ZeRO，不需要重写模型。不适合的场景是追求极致MFU的超大规模训练，因为TP/PP的实现质量和性能不如Megatron。此外也不太适合需要精细控制并行策略的场景。&lt;/p&gt;
@@ -16,17 +22,24 @@
 &lt;/h3&gt;&lt;p&gt;同样以Python+PyTorch为基础平台，在此基础上有自定义CUDA kernel（fused Adam、fused kernels等），通信层封装了PyTorch的 &lt;code&gt;torch.distributed&lt;/code&gt;，支持NCCL后端，也支持ROCm/AMD。核心组件包括ZeRO Optimizer（Stage 1/2/3）、DeepSpeed Engine（训练循环实现的主要组件）、Pipeline Engine、配置系统（JSON config，不需要改代码）。&lt;/p&gt;
 &lt;h3 id="特性-1"&gt;特性
 &lt;/h3&gt;&lt;p&gt;ZeRO系列是DeepSpeed系列的核心贡献，包括Stage 1（shard 优化器状态）、Stage 2（shard 优化器状态+梯度）和Stage 3（shard 优化器状态+梯度+参数）。ZeRO-Offload（优化器状态offload到CPU）、ZeRO-Infinity（扩展到NVMe）。ZeRO++是后续优化，包含 hierarchical partitioning、quantized all-gather等。&lt;/p&gt;
-&lt;p&gt;并行策略方面：3D 并行（DP(ZeRO)+PP+TP）。值得一提的是社区认为其TP的实现不如Megatron原生。PP支持1F1B调度。Sequence Parallelism采用Ulysses方案，和Megatron的SP不同。Automatic Tensor Parallelism（对HuggingFace模型自动做TP，但仅限推理）。&lt;/p&gt;
+&lt;p&gt;并行策略方面：3D并行（DP(ZeRO)+PP+TP）。值得一提的是社区认为其TP的实现不如Megatron原生。PP支持1F1B调度。Sequence Parallelism采用Ulysses方案，和Megatron的SP不同。Automatic Tensor Parallelism（对HuggingFace模型自动做TP，但仅限推理）。&lt;/p&gt;
 &lt;p&gt;混合精度方面：FP16、BF16支持。&lt;/p&gt;
 &lt;p&gt;通信优化方面：1-bit Adam / 0/1 Adam / 1-bit LAMB。这部分梯度通信压缩可以减少通信量最高26x，是其区别于FSDP的重要feature之一。&lt;/p&gt;
 &lt;p&gt;此外，其也包括了后训练需要的feature，以DeepSpeed-Chat（RLHF pipeline，包括SFT和PPO流程）为主。除此之外，还包括了Activation Checkpointing，Gradient Accumulation，Sparse Attention。&lt;/p&gt;
 &lt;p&gt;特别值得一提的是，ZeRO论文本身是分布式训练领域引用最高的论文之一。ZeRO的三级sharding思想直接影响了PyTorch FSDP的设计。&amp;quot;改配置而不是改代码&amp;quot;的设计哲学影响了后续很多框架。&lt;/p&gt;
 &lt;p&gt;DeepSpeed并不包括Context Parallel和Ring Attention。此外，也没有FP8训练支持。有MoE支持但不如Megatron完善。社区维护活跃度近年有所下降，DeepSpeed-Chat被广泛反映问题较多。&lt;/p&gt;
+&lt;h2 id="megatron-deepspeed混合方案"&gt;Megatron-DeepSpeed（混合方案）
+&lt;/h2&gt;&lt;p&gt;取Megatron的TP/PP+DeepSpeed的ZeRO，组合成工业界实际使用最多的大规模训练方案。&lt;/p&gt;
+&lt;h3 id="定位-2"&gt;定位
+&lt;/h3&gt;&lt;p&gt;面向需要同时使用高效model parallelism和memory-efficient data parallelism的超大规模训练场景。BLOOM-176B、MT-NLG-530B等知名模型的训练都使用了这个组合。&lt;/p&gt;
+&lt;h3 id="组成-2"&gt;组成
+&lt;/h3&gt;&lt;p&gt;其实就是Megatron-LM和DeepSpeed的集成方案。TP和PP由Megatron提供，ZeRO（通常是Stage 1，和PP配合时Stage 2/3有性能问题）由DeepSpeed提供，通信压缩等额外优化也来自DeepSpeed。&lt;/p&gt;
+&lt;p&gt;ZeRO和PP配合时通常只用Stage 1。Stage 2在PP下需要额外的reduce-scatter通信，开销大。Stage 3理论上可以但当时性能不够好。这主要是历史遗留问题，DeepSpeed官方后来承认如果重新评估可能会选Stage 3。&lt;/p&gt;
 &lt;h2 id="pytorch-fsdpfsdp2pytorch"&gt;PyTorch FSDP/FSDP2（PyTorch）
 &lt;/h2&gt;&lt;p&gt;PyTorch官方的ZeRO实现，在演化过程中从独立库演变为框架原生组件，是当前PyTorch生态中data parallel的标准方案。准确的说，它不是一个独立框架，而是一个组件，在演化过程中以特殊功能被嵌合在生态内。&lt;/p&gt;
-&lt;h3 id="定位-2"&gt;定位
+&lt;h3 id="定位-3"&gt;定位
 &lt;/h3&gt;&lt;p&gt;不是独立的预训练框架，而是一个并行策略组件。被TorchTitan、TRL、OpenRLHF等框架作为底层使用。面向所有使用PyTorch的训练场景。适合需要ZeRO级别显存优化但不想引入DeepSpeed外部依赖的场景。不适合需要TP/PP的场景，FSDP本身不提供这些，需要配合其他组件。&lt;/p&gt;
-&lt;h3 id="组成-2"&gt;组成
+&lt;h3 id="组成-3"&gt;组成
 &lt;/h3&gt;&lt;p&gt;纯PyTorch原生，不依赖任何外部库。FSDP1基于FlatParameter实现，FSDP2基于per-parameter DTensor sharding实现。&lt;/p&gt;
 &lt;h3 id="特性-2"&gt;特性
 &lt;/h3&gt;&lt;p&gt;FSDP1等价于ZeRO-3，也支持ZeRO-2和不shard（纯DDP）。支持CPU offload、mixed precision和activation checkpointing。&lt;/p&gt;
