@@ -1,24 +1,4 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>开发日志 on Fain的Blog</title><link>https://knightofaxis.github.io/categories/%E5%BC%80%E5%8F%91%E6%97%A5%E5%BF%97/</link><description>Recent content in 开发日志 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Tue, 21 Apr 2026 15:27:53 +0800</lastBuildDate><atom:link href="https://knightofaxis.github.io/categories/%E5%BC%80%E5%8F%91%E6%97%A5%E5%BF%97/index.xml" rel="self" type="application/rss+xml"/><item><title>LLM 学习日志 #4 预训练框架：Megatron-LM、DeepSpeed和FairScale-FSDP</title><link>https://knightofaxis.github.io/posts/20260421-pretrain/</link><pubDate>Tue, 21 Apr 2026 15:27:53 +0800</pubDate><guid>https://knightofaxis.github.io/posts/20260421-pretrain/</guid><description>&lt;p&gt;🚧🚧🚧施工中🚧🚧🚧&lt;/p&gt;
-&lt;h2 id="megatron-lmnvidia"&gt;Megatron-LM（NVIDIA）
-&lt;/h2&gt;&lt;p&gt;这是最早的祖师爷级别的预训练框架，也是预训练框架中最大而全的框架。&lt;/p&gt;
-&lt;h3 id="定位"&gt;定位
-&lt;/h3&gt;&lt;p&gt;Megatron-LM的定位是明确的面向大规模的、工业级别的场景，其核心卖点是极致的大规模训练性能，面向的是需要千卡级训练的工业团队和研究机构。代码量大、学习曲线陡峭，但它定义了整个领域的&amp;quot;标准做法&amp;quot;——几乎所有其他框架的 TP 实现都在模仿 Megatron 的 Column/Row Parallel 模式。&lt;/p&gt;
-&lt;h3 id="组成"&gt;组成
-&lt;/h3&gt;&lt;p&gt;核心分为两部分：Megatron-LM 是包含训练脚本的参考实现，Megatron Core 是可复用的组件库。&lt;/p&gt;
-&lt;h3 id="特性"&gt;特性
-&lt;/h3&gt;&lt;h2 id="deepspeedmicrosoft"&gt;DeepSpeed（Microsoft）
-&lt;/h2&gt;&lt;h3 id="定位-1"&gt;定位
-&lt;/h3&gt;&lt;h3 id="组成-1"&gt;组成
-&lt;/h3&gt;&lt;h3 id="特性-1"&gt;特性
-&lt;/h3&gt;&lt;h2 id="fairscale-fsdp"&gt;FairScale-FSDP
-&lt;/h2&gt;&lt;h3 id="定位-2"&gt;定位
-&lt;/h3&gt;&lt;h3 id="组成-2"&gt;组成
-&lt;/h3&gt;&lt;h3 id="特性-2"&gt;特性
-&lt;/h3&gt;&lt;h2 id="其他预训练框架"&gt;其他预训练框架
-&lt;/h2&gt;&lt;h3 id="nanotronhuggingface"&gt;Nanotron（HuggingFace）
-&lt;/h3&gt;&lt;h3 id="torchtitanmetapytorch官方"&gt;TorchTitan（Meta+Pytorch官方）
-&lt;/h3&gt;&lt;h2 id="各框架核心特性汇总表"&gt;各框架核心特性汇总表
-&lt;/h2&gt;</description></item><item><title>Pico-vLLM 开发日志 #14 Prefix Caching</title><link>https://knightofaxis.github.io/posts/20260417-prefixcaching/</link><pubDate>Sat, 18 Apr 2026 21:56:39 +0800</pubDate><guid>https://knightofaxis.github.io/posts/20260417-prefixcaching/</guid><description>&lt;p&gt;“如果你想体验极致的数学规整美感和爽感，就去实现Paged Attention；如果你想体验抽象分层设计原则和一致性维持的究极长痛，去实现Prefix Caching。”&lt;/p&gt;
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>开发日志 on Fain的Blog</title><link>https://knightofaxis.github.io/categories/%E5%BC%80%E5%8F%91%E6%97%A5%E5%BF%97/</link><description>Recent content in 开发日志 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Sat, 18 Apr 2026 21:56:39 +0800</lastBuildDate><atom:link href="https://knightofaxis.github.io/categories/%E5%BC%80%E5%8F%91%E6%97%A5%E5%BF%97/index.xml" rel="self" type="application/rss+xml"/><item><title>Pico-vLLM 开发日志 #14 Prefix Caching</title><link>https://knightofaxis.github.io/posts/20260417-prefixcaching/</link><pubDate>Sat, 18 Apr 2026 21:56:39 +0800</pubDate><guid>https://knightofaxis.github.io/posts/20260417-prefixcaching/</guid><description>&lt;p&gt;“如果你想体验极致的数学规整美感和爽感，就去实现Paged Attention；如果你想体验抽象分层设计原则和一致性维持的究极长痛，去实现Prefix Caching。”&lt;/p&gt;
 &lt;p&gt;​																							——我自己&lt;/p&gt;
 &lt;p&gt;======================================================================&lt;/p&gt;
 &lt;p&gt;这么多天没更新，今天终于更新了。之所以没有和之前一样2~3天一更新，是因为这中间的间隔，几乎全部在对Prefix Caching进行架构设计、实现迭代和反复的DEBUG。个人的体感是，在所有的推理框架实现当中，Prefix Caching绝对是除了分布式中最复杂的部分（当然，这部分非常非常大，但对于许多feature来说，其实并不是和分布式本身强绑定的）以外的皇冠上的明珠，是实现最为复杂的、同时也是相当重要的架构级feature，其挑战在于其并非是局部的算子或者数据结构设计，而是同时牵动存储分配、请求生命周期、缓存一致性的全局性架构。尤其是，如果需求足够好的兼容性，也就是需求既有radix-tree的token级别的粒度和相应可扩展性，又需求底层的Block Manager能够天然、不需要额外处理的自然同时兼容radix-tree模式，会引入非常复杂的系统架构设计需求和要求非常小心的实现。因此，这里会完整的把我的开发工程、主要最后定稿的想法和设计模式、途中遇到的一些问题，尽可能在遗忘和丢失之前。如果能够帮助到后来者和读者的话，那就太好了。&lt;/p&gt;
