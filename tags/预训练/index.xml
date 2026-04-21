@@ -1,24 +1,91 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>预训练 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/</link><description>Recent content in 预训练 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Tue, 21 Apr 2026 15:27:53 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/index.xml" rel="self" type="application/rss+xml"/><item><title>LLM 学习日志 #4 预训练框架：Megatron-LM、DeepSpeed和FairScale-FSDP</title><link>https://Koas-W.github.io/posts/20260421-pretrain/</link><pubDate>Tue, 21 Apr 2026 15:27:53 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260421-pretrain/</guid><description>&lt;p&gt;🚧🚧🚧施工中🚧🚧🚧&lt;/p&gt;
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>预训练 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/</link><description>Recent content in 预训练 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Tue, 21 Apr 2026 15:27:53 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/index.xml" rel="self" type="application/rss+xml"/><item><title>LLM 学习日志 #4 预训练框架：Megatron-LM、DeepSpeed和FSDP</title><link>https://Koas-W.github.io/posts/20260421-pretrain/</link><pubDate>Tue, 21 Apr 2026 15:27:53 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260421-pretrain/</guid><description>&lt;p&gt;这一篇接续上文，将会介绍一下值得一提的当下主流训练框架。&lt;/p&gt;
 &lt;h2 id="megatron-lmnvidia"&gt;Megatron-LM（NVIDIA）
-&lt;/h2&gt;&lt;p&gt;这是最早的祖师爷级别的预训练框架，也是预训练框架中最大而全的框架。&lt;/p&gt;
+&lt;/h2&gt;&lt;p&gt;这是最早的祖师爷级别的预训练框架，也是预训练框架中最大而全的框架。它最早的系统性提出了TP + PP组合方案的预训练框架，定义了整个领域的标准做法。&lt;/p&gt;
 &lt;h3 id="定位"&gt;定位
-&lt;/h3&gt;&lt;p&gt;Megatron-LM的定位是明确的面向大规模的、工业级别的场景，其核心卖点是极致的大规模训练性能，面向的是需要千卡级训练的工业团队和研究机构。代码量大、学习曲线陡峭，但它定义了整个领域的&amp;quot;标准做法&amp;quot;——几乎所有其他框架的 TP 实现都在模仿 Megatron 的 Column/Row Parallel 模式。&lt;/p&gt;
+&lt;/h3&gt;&lt;p&gt;Megatron-LM的定位是明确的面向大规模的、工业级别的场景，其核心卖点是极致的大规模训练性能，面向的是需要千卡级训练的工业团队和研究机构。代码量大、学习曲线陡峭，但它定义了整个领域的&amp;quot;标准做法&amp;quot;。几乎所有其他框架的TP实现都在模仿Megatron的Column/Row Parallel模式。此外，Megatron-LM同时也是学术界研究大规模并行策略的首选参考实现，它的几篇论文（Megatron-LM 2019、Efficient Large-Scale Training 2021、Reducing Activation Recomputation 2022）本身就是分布式训练领域的经典文献。&lt;/p&gt;
+&lt;p&gt;它不适合的场景是所有相反的场景：小团队快速实验、硬件资源较少的实验室环境、单机微调，复杂的部署和源码量带来的陡峭学习曲线使其得不偿失，且性能优势无法发挥。&lt;/p&gt;
 &lt;h3 id="组成"&gt;组成
-&lt;/h3&gt;&lt;p&gt;核心分为两部分：Megatron-LM 是包含训练脚本的参考实现，Megatron Core 是可复用的组件库。&lt;/p&gt;
+&lt;/h3&gt;&lt;p&gt;基于Python+PyTorch，依赖NCCL+TransformerEngine（NVIDIA的混合精度库）+CUDA/C++开发和运行。&lt;/p&gt;
+&lt;p&gt;核心分为两部分：Megatron-LM是包含训练脚本的参考实现，Megatron Core是可复用的组件库。前者包括了预训练脚本、模型定义、数据处理流程，后者提供transformer building blocks、并行策略的封装、混合精度管理等等功能。也因此，许多（实际上是大部分）第三方框架可以（且选择）直接依赖Megatron Core而不用整个 Megatron-LM，例子包括了NeMo、veRL等著名后训练框架。&lt;/p&gt;
 &lt;h3 id="特性"&gt;特性
 &lt;/h3&gt;&lt;h2 id="deepspeedmicrosoft"&gt;DeepSpeed（Microsoft）
-&lt;/h2&gt;&lt;h3 id="定位-1"&gt;定位
-&lt;/h3&gt;&lt;h3 id="组成-1"&gt;组成
-&lt;/h3&gt;&lt;h3 id="特性-1"&gt;特性
-&lt;/h3&gt;&lt;h2 id="fairscale-fsdp"&gt;FairScale-FSDP
-&lt;/h2&gt;&lt;h3 id="定位-2"&gt;定位
-&lt;/h3&gt;&lt;h3 id="组成-2"&gt;组成
-&lt;/h3&gt;&lt;h3 id="特性-2"&gt;特性
-&lt;/h3&gt;&lt;h2 id="其他预训练框架"&gt;其他预训练框架
+&lt;/h2&gt;&lt;p&gt;以ZeRO系列优化为核心，通过最小代码改动让PyTorch模型实现大规模训练的库。&lt;/p&gt;
+&lt;h3 id="定位-1"&gt;定位
+&lt;/h3&gt;&lt;p&gt;面向不想大幅改动模型代码但需要训练大模型的团队。核心卖点是低侵入性，通过修改配置而不是代码本身就能启用ZeRO，不需要重写模型。不适合的场景是追求极致MFU的超大规模训练，因为TP/PP的实现质量和性能不如Megatron。此外也不太适合需要精细控制并行策略的场景。&lt;/p&gt;
+&lt;h3 id="组成-1"&gt;组成
+&lt;/h3&gt;&lt;p&gt;同样以Python+PyTorch为基础平台，在此基础上有自定义CUDA kernel（fused Adam、fused kernels等），通信层封装了PyTorch的 &lt;code&gt;torch.distributed&lt;/code&gt;，支持NCCL后端，也支持ROCm/AMD。核心组件包括ZeRO Optimizer（Stage 1/2/3）、DeepSpeed Engine（训练循环实现的主要组件）、Pipeline Engine、配置系统（JSON config，不需要改代码）。&lt;/p&gt;
+&lt;h3 id="特性-1"&gt;特性
+&lt;/h3&gt;&lt;p&gt;ZeRO系列是DeepSpeed系列的核心贡献，包括Stage 1（shard 优化器状态）、Stage 2（shard 优化器状态+梯度）和Stage 3（shard 优化器状态+梯度+参数）。ZeRO-Offload（优化器状态offload到CPU）、ZeRO-Infinity（扩展到NVMe）。ZeRO++是后续优化，包含 hierarchical partitioning、quantized all-gather等。&lt;/p&gt;
+&lt;p&gt;并行策略方面：3D 并行（DP(ZeRO)+PP+TP）。值得一提的是社区认为其TP的实现不如Megatron原生。PP支持1F1B调度。Sequence Parallelism采用Ulysses方案，和Megatron的SP不同。Automatic Tensor Parallelism（对HuggingFace模型自动做TP，但仅限推理）。&lt;/p&gt;
+&lt;p&gt;混合精度方面：FP16、BF16支持。&lt;/p&gt;
+&lt;p&gt;通信优化方面：1-bit Adam / 0/1 Adam / 1-bit LAMB。这部分梯度通信压缩可以减少通信量最高26x，是其区别于FSDP的重要feature之一。&lt;/p&gt;
+&lt;p&gt;此外，其也包括了后训练需要的feature，以DeepSpeed-Chat（RLHF pipeline，包括SFT和PPO流程）为主。除此之外，还包括了Activation Checkpointing，Gradient Accumulation，Sparse Attention。&lt;/p&gt;
+&lt;p&gt;特别值得一提的是，ZeRO论文本身是分布式训练领域引用最高的论文之一。ZeRO的三级sharding思想直接影响了PyTorch FSDP的设计。&amp;quot;改配置而不是改代码&amp;quot;的设计哲学影响了后续很多框架。&lt;/p&gt;
+&lt;p&gt;DeepSpeed并不包括Context Parallel和Ring Attention。此外，也没有FP8训练支持。有MoE支持但不如Megatron完善。社区维护活跃度近年有所下降，DeepSpeed-Chat被广泛反映问题较多。&lt;/p&gt;
+&lt;h2 id="pytorch-fsdpfsdp2pytorch"&gt;PyTorch FSDP/FSDP2（PyTorch）
+&lt;/h2&gt;&lt;p&gt;PyTorch官方的ZeRO实现，在演化过程中从独立库演变为框架原生组件，是当前PyTorch生态中data parallel的标准方案。准确的说，它不是一个独立框架，而是一个组件，在演化过程中以特殊功能被嵌合在生态内。&lt;/p&gt;
+&lt;h3 id="定位-2"&gt;定位
+&lt;/h3&gt;&lt;p&gt;不是独立的预训练框架，而是一个并行策略组件。被TorchTitan、TRL、OpenRLHF等框架作为底层使用。面向所有使用PyTorch的训练场景。适合需要ZeRO级别显存优化但不想引入DeepSpeed外部依赖的场景。不适合需要TP/PP的场景，FSDP本身不提供这些，需要配合其他组件。&lt;/p&gt;
+&lt;h3 id="组成-2"&gt;组成
+&lt;/h3&gt;&lt;p&gt;纯PyTorch原生，不依赖任何外部库。FSDP1基于FlatParameter实现，FSDP2基于per-parameter DTensor sharding实现。&lt;/p&gt;
+&lt;h3 id="特性-2"&gt;特性
+&lt;/h3&gt;&lt;p&gt;FSDP1等价于ZeRO-3，也支持ZeRO-2和不shard（纯DDP）。支持CPU offload、mixed precision和activation checkpointing。&lt;/p&gt;
+&lt;p&gt;FSDP2在此基础上额外支持了per-parameter sharding（不再把参数flatten成一大块），和 &lt;code&gt;torch.compile&lt;/code&gt; 兼容，显存效率比FSDP1高约7%，性能平均提升约1.5%。&lt;/p&gt;
+&lt;p&gt;本身不提供TP、PP、SP、CP等model parallelism。不提供训练循环、数据加载、checkpoint管理等框架级功能。不是一个完整的训练解决方案，需要搭配其他组件使用。&lt;/p&gt;
+&lt;p&gt;此外，值得一提的是FSDP的演化历史。它其实经历了三个阶段，FairScale（Meta的早期实现。这个时候是独立库）→PyTorch FSDP1（被PyTorch吸收进入主库）→FSDP2（用DTensor重写，和TorchTitan共同开发）。作为数学原理和DeepSpeed完全相同（都是 ZeRO 的三级 sharding），但起源和演化历史完全不同的对位存在，其实现方式和API设计与DeepSpeed的异同之处是一件很值得研究的有意思的事情。&lt;/p&gt;
+&lt;p&gt;实际上，它的生态位和前面的DeepSpeed高度重叠：前者本来就是以最小侵入为卖点，后者索性直接在PyTorch内原生内置，两者的数学原理又相同。FSDP在逐步蚕食DeepSpeed的市场份额。在2026年，对于大多数团队在2-8卡上微调7B-70B模型的场景，PyTorch FSDP已经成为默认推荐。这个转变在过去两年内发生得很快。&lt;/p&gt;
+&lt;h2 id="其他预训练框架"&gt;其他预训练框架
 &lt;/h2&gt;&lt;h3 id="nanotronhuggingface"&gt;Nanotron（HuggingFace）
-&lt;/h3&gt;&lt;h3 id="torchtitanmetapytorch官方"&gt;TorchTitan（Meta+Pytorch官方）
-&lt;/h3&gt;&lt;h2 id="各框架核心特性汇总表"&gt;各框架核心特性汇总表
-&lt;/h2&gt;</description></item><item><title>LLM 学习日志 #3 训练、预训练和后训练框架：Megatron-LM、DeepSpeed和FairScale-FSDP</title><link>https://Koas-W.github.io/posts/20260420-pretrain/</link><pubDate>Mon, 20 Apr 2026 01:28:45 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260420-pretrain/</guid><description>&lt;p&gt;今天进行简单的训练框架的调研。和我们在日常的博客、知乎文章和其他零零碎碎的地方看到的开源资料不同，其实从Megatron-LM出世到现在，训练框架已经发生了长足的发展，乃至于接近发生了范式级别的变化，不过，就我个人的观察而言，目前的开源资料针对这些新变化的普及其实还不够充分。具体而言，至少在最近1~2年的时间跨度内，工业界的前沿热点已经逐渐从单纯的实现高性能、大规模的预训练，转向中等规模的微调、后训练等等面向不同具体领域和需求的后训练相关内容。&lt;/p&gt;
+&lt;/h3&gt;&lt;p&gt;以简洁和教学价值为核心的minimalistic 3D并行预训练库。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;定位&lt;/strong&gt;：面向想理解3D并行实现原理的学习者和研究者，以及需要一个轻量级预训练工具的小团队。配套的Ultrascale Playbook是目前最好的分布式训练实践指南之一。不适合追求极致性能的工业场景，且feature覆盖不如Megatron。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;组成&lt;/strong&gt;：Python + PyTorch，使用torchrun启动，依赖Flash Attention和Triton。核心组件包括DistributedTrainer（训练编排）、ParallelContext（管理DP/TP/PP的process group）、PipelineBlock（PP的stage封装）、NanotronModel（模型基类）。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;特性&lt;/strong&gt;：&lt;/p&gt;
+&lt;p&gt;具有的特性：TP（模仿Megatron的Column/Row Parallel）、PP（1F1B调度）、DP、ZeRO-1、Activation Checkpointing、支持Llama/Mistral/Qwen等主流架构、支持和HuggingFace checkpoint的互相转换、支持Tied Parameters。&lt;/p&gt;
+&lt;p&gt;不具有的特性：ZeRO系列没有Stage 2/3的实现、没有EP/CP/SP、没有FP8训练、PP调度只有基础1F1B（没有Interleaved或Zero Bubble）、没有分布式Checkpoint resharding。&lt;/p&gt;
+&lt;h3 id="torchtitanmetapytorch官方"&gt;TorchTitan（Meta+Pytorch官方）
+&lt;/h3&gt;&lt;p&gt;PyTorch官方的预训练参考实现，是为了展示PyTorch最新分布式特性而开发的showcase实现，同时也是一个clean-room implementation。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;定位&lt;/strong&gt;：面向研究团队和框架开发者，作为PyTorch分布式训练能力的展示平台和最佳实践参考，同时也是可用于生产的预训练系统。不适合的场景是需要MoE/EP支持的场景，以及需要完整后训练pipeline的场景。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;组成&lt;/strong&gt;：完全基于PyTorch原生API，核心抽象是DTensor（分布式tensor表示）和DeviceMesh（设备拓扑抽象）。使用FSDP2作为data parallel层。不依赖Megatron或DeepSpeed。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;特性&lt;/strong&gt;：&lt;/p&gt;
+&lt;p&gt;具有的特性：ZeRO-1/2/3（通过FSDP2这一原生实现获得）、TP、PP、CP（Context Parallel）、Float8/MXFP8训练（也即对Blackwell GPU硬件特性的支持）、torch.compile集成、Activation Checkpointing（layer级和operator级selective）、异步分布式Checkpoint（DCP）、SymmetricMemory（节点内高效的peer-to-peer通信实现）、AsyncTP（通信计算重叠）、SFT 支持、Flight Recorder（调试工具）、Gradient Accumulation。&lt;/p&gt;
+&lt;p&gt;不具有的特性：没有MoE/EP支持、PP调度没有Zero Bubble等高级方案、整体feature数量不如Megatron、没有通信压缩。&lt;/p&gt;
+&lt;p&gt;此外，其重要贡献和卖点之一在于DTensor+DeviceMesh的统一抽象（和FSDP2一样），即让不同并行维度可以作为独立的、可组合的模块叠加，模型代码几乎不需要改动。这个设计思想对整个PyTorch分布式生态有深远影响。&lt;/p&gt;
+&lt;h2 id="各框架核心特性汇总表"&gt;各框架核心特性汇总表
+&lt;/h2&gt;&lt;p&gt;此表有ai辅助排版。感谢ai。如下：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;特性 Megatron-LM DeepSpeed FSDP/FSDP2 TorchTitan Nanotron
+─────────────────────────────────────────────────────────────────────────────────────────
+维护方 NVIDIA Microsoft PyTorch Meta/PyTorch HuggingFace
+定位 工业极致性能 低侵入易用 并行原语组件 官方参考实现 教学/轻量
+
+DP ✓ ✓ ✓ ✓(FSDP2) ✓
+TP ✓ ✓(弱) ✗ ✓ ✓
+PP ✓ ✓ ✗ ✓ ✓
+SP ✓ ✓(Ulysses) ✗ ✗ ✗
+CP ✓(含Dynamic) ✗ ✗ ✓ ✗
+EP (MoE) ✓ ✓ ✗ ✗ ✗
+
+ZeRO-1 ✓(Dist.Opt.) ✓ ✓ ✓(FSDP2) ✓
+ZeRO-2 ✗(需DS) ✓ ✓ ✓(FSDP2) ✗
+ZeRO-3 ✗(需DS) ✓ ✓ ✓(FSDP2) ✗
+ZeRO-Offload ✗ ✓ ✓(CPU) ✗ ✗
+ZeRO-Infinity ✗ ✓ ✗ ✗ ✗
+
+PP调度: 1F1B ✓ ✓ ✗ ✓ ✓
+PP调度: Interleaved ✓ ✗ ✗ ✗ ✗
+PP调度: Zero Bubble ✗ ✗ ✗ ✗ ✗
+
+Activation Ckpt ✓(+selective) ✓ ✓ ✓(+selective) ✓
+Mixed Precision-BF16 ✓ ✓ ✓ ✓ ✓
+FP8 Train ✓(TE) ✗ ✗ ✓(Float8) ✗
+Distr-Checkpoint ✓ ✓ ✗ ✓(DCP,Async) ✗
+torch.compile Partial ✗ ✓ ✓ ✗
+通信压缩 ✗ ✓(1-bit Adam) ✗ ✗ ✗
+SFT支持 ✗(NeMo) ✓(DS-Chat) ✗ ✓ ✗
+
+非NVIDIA硬件 ✗ ✓(ROCm) ✓ ✓(ROCm) ✓
+代码简洁度 低 中 高 高 最高
+学习曲线 陡峭 中等 平缓 平缓 最平缓
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;可以看出，即使是最简单的教学类预训练框架，其feature的复杂性也不比一般的推理框架少。对于后训练框架，这个问题还会更明显。也许，训练框架的开发在未来可能比推理框架的开发更具有可持续性。也就是说，Agent Infra的后续发展和完善也许会进一步成为后续几年的热点。不过，究竟会是以什么形式、挑战会是什么，这仍然是一个值得思考的问题。&lt;/p&gt;</description></item><item><title>LLM 学习日志 #3 训练、预训练和后训练基础</title><link>https://Koas-W.github.io/posts/20260420-pretrain/</link><pubDate>Mon, 20 Apr 2026 01:28:45 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260420-pretrain/</guid><description>&lt;p&gt;今天进行简单的训练框架的调研。和我们在日常的博客、知乎文章和其他零零碎碎的地方看到的开源资料不同，其实从Megatron-LM出世到现在，训练框架已经发生了长足的发展，乃至于接近发生了范式级别的变化，不过，就我个人的观察而言，目前的开源资料针对这些新变化的普及其实还不够充分。具体而言，至少在最近1~2年的时间跨度内，工业界的前沿热点已经逐渐从单纯的实现高性能、大规模的预训练，转向中等规模的微调、后训练等等面向不同具体领域和需求的后训练相关内容。&lt;/p&gt;
 &lt;p&gt;这个演化的方向和近1~2年中Agent的崛起密切相关，同时也和参数规模的膨胀相关。随着LLM的scaling law发力，在5年间，LLM的参数量已经从单卡可以推理的约100M增加到了令人发指的约1000B，而后者光是训练就需要以十万计数量的GPU，进行持续的为期数月甚至将近年为单位的后训练。许多更小的模型则随后从这个教师模型中提取知识进行蒸馏。这意味着一件事情：基模本身的训练越来越依赖于规模效应，而规模效应和硬件资源挂钩，硬件资源和财力上限挂钩。因此，越来越多的无法在这个维度上竞争的企业（包括企业内部的团队）转向后训练，即通过更小卡需求的方式和可控规模的训练数据量，实现基于基模的垂直领域性能表现提升。也因此，这一热点需求的改变反过来催生了训练框架范式的改变：从规整的、追求规模可扩展性、强调分布式设计和并行效率的大规模预训练框架，变成强调灵活协调性、追求复杂训练流程和支持不同训练算法的后训练和强化学习训练框架，同时可能还需要和推理框架有效整合。&lt;/p&gt;
 &lt;p&gt;值得注意的是，所有的框架几乎全部基于&lt;strong&gt;Python+Pytorch&lt;/strong&gt;，底层通信依赖&lt;strong&gt;NCCL&lt;/strong&gt;，通过PyTorch的&lt;code&gt;torch.distributed&lt;/code&gt;封装调用。具体来说，PyTorch提供了 &lt;code&gt;ProcessGroup&lt;/code&gt;、&lt;code&gt;all_reduce&lt;/code&gt;、&lt;code&gt;all_gather&lt;/code&gt;、&lt;code&gt;reduce_scatter&lt;/code&gt; 等原语，各框架在此之上构建自己的并行策略。部分框架（Megatron-LM、DeepSpeed）还包含自定义的C++/CUDA扩展来加速特定算子。Triton kernel在较新的框架（TorchTitan、Nanotron）中也有使用。这再次提醒了Python语言（实际上是Pytorch平台）在LLM时代的统治力。即使它并不是性能最优化的语言，也依然在工业场景里没有被C/C++淘汰，很大程度上和早期的奠基者效应以及完善的生态依赖有关系。&lt;/p&gt;
 &lt;h2 id="什么是训练"&gt;什么是训练
