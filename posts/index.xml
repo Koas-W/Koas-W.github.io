@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Posts on Fain的Blog</title><link>https://Koas-W.github.io/posts/</link><description>Recent content in Posts on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Wed, 22 Apr 2026 21:26:37 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/posts/index.xml" rel="self" type="application/rss+xml"/><item><title>Picotron开发日志 #0 预期目标和特性规划</title><link>https://Koas-W.github.io/posts/20260422-picotronplan/</link><pubDate>Wed, 22 Apr 2026 21:26:37 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260422-picotronplan/</guid><description>&lt;p&gt;这是我最近新考虑开始开发的一个个人项目，作为Pico-系列的第二作，尝试实现一个依赖尽可能少的、端到端的自己实现和可真实环境工作的预训练框架。&lt;/p&gt;
-&lt;p&gt;它的首要目标将是自主性：通过尽可能少的依赖和复用现成的功能性组件，实现全流程的真实实践，同时避免过多参考现有，而是根据自己的设计灵感进行开发。它的次要目标是尽可能的高性能，虽然很有可能达不到Megatron的水平，但它被期望应该可以达到工程上可接受的性能程度，即MFU不会过低。&lt;/p&gt;
-&lt;p&gt;随后，它将被用于后续工作、训练和微调相应模型，并且和推理框架配合，进一步实现后训练框架的搭建和端到端的大模型全生命周期开发。&lt;/p&gt;
+&lt;p&gt;它的首要目标将是自主性：通过尽可能少的依赖和复用现成的功能性组件，实现全流程的真实实践，同时完全避免参考现有仓库的设计、避免过多复用平台本身的组件，而是根据自己的设计灵感进行开发、自己了解各种功能具体的实现过程。它的次要目标是尽可能的高性能，虽然很有可能达不到Megatron的水平，但它被期望应该可以达到工程上可接受的性能程度，即MFU不会过低。&lt;/p&gt;
+&lt;p&gt;随后，它将被用于后续工作、训练和微调相应模型，并且和推理框架配合，进一步实现后训练框架的搭建和端到端的大模型全生命周期开发。预训练框架的工作不会马上开始，但会逐渐启动，和pico-vllm的收尾和性能改善、文件整理和汇总的工作一起并行。不管怎么说，先git init吧🍥！&lt;/p&gt;
 &lt;h2 id="外部依赖"&gt;外部依赖
 &lt;/h2&gt;&lt;p&gt;Python 3.10（无需多言）&lt;/p&gt;
 &lt;p&gt;PyTorch 2.x（torch, torch.distributed, torch.autograd）&lt;/p&gt;
