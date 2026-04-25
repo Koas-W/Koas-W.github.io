@@ -26,7 +26,55 @@ $$&lt;p&gt;
 &lt;h3 id="一个随机初始化的大模型应该具有怎样的loss"&gt;一个随机初始化的大模型应该具有怎样的Loss
 &lt;/h3&gt;&lt;p&gt;这是另一个边界情况。虽然不是理论上的精确上界，但我们可以把这个情况看作是“日常训练过程中会真实遇到的Loss的大约上界”——毕竟模型大概率不会越训练越差，对吧？&lt;/p&gt;
 &lt;h2 id="loss曲线具有怎样的特征"&gt;Loss曲线具有怎样的特征？
-&lt;/h2&gt;&lt;p&gt;让我们以我们在5070上跑的小小大模型作为&lt;/p&gt;
+&lt;/h2&gt;&lt;p&gt;让我们以我们在5070上跑的小小大模型作为参照物。它的参数结构如下：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;13
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;config &lt;span style="color:#f92672"&gt;=&lt;/span&gt; AutoConfig&lt;span style="color:#f92672"&gt;.&lt;/span&gt;for_model(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;llama&amp;#34;&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; hidden_size&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;256&lt;/span&gt;, &lt;span style="color:#75715e"&gt;# LLaMA-7B 是 4096&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; intermediate_size&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1024&lt;/span&gt;, &lt;span style="color:#75715e"&gt;# LLaMA-7B 是 11008&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_attention_heads&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;16&lt;/span&gt;, &lt;span style="color:#75715e"&gt;# LLaMA-7B 是 32&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_key_value_heads&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;8&lt;/span&gt;, &lt;span style="color:#75715e"&gt;# GQA, LLaMA-7B 是 32 (MHA)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_hidden_layers&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;8&lt;/span&gt;, &lt;span style="color:#75715e"&gt;# LLaMA-7B 是 32&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; max_position_embeddings&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;512&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; vocab_size&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;50257&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; rms_norm_eps&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1e-5&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; hidden_act&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;silu&amp;#34;&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; tie_word_embeddings&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#66d9ef"&gt;True&lt;/span&gt;, &lt;span style="color:#75715e"&gt;# embedding 和 lm_head 共享权重&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;它的参数量大小是：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;模型: Tiny LLaMA
+参数量: 20,734,464 (20.7M)
+可训练: 20,734,464
+层数: 8
+模型显存: 39.5 MB
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;直接使用torch对其进行训练，使用的数据集为Hugging Face开源的roneneldan/TinyStories，大约1GB存储大小。训练2个epoch，其Loss变化如下：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;前 10%: 平均 Loss = 9.8657
+中间: 平均 Loss = 4.7181
+后 10%: 平均 Loss = 4.3138
+
+初始 Loss (前5步均值): 10.8787
+最终 Loss (后5步均值): 4.3660
+下降幅度: 6.5127 (59.9%)
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;可以从中得到初始化的时候、训练最终稳定的时候的Loss值大小。&lt;/p&gt;
+&lt;p&gt;它和我们前面的分析相符：随机初始化的时候，由于其词表大小为&lt;/p&gt;
 &lt;h2 id="模型规模训练数据量和loss的关系大致如何"&gt;模型规模、训练数据量和Loss的关系大致如何？
 &lt;/h2&gt;&lt;h2 id="训练前后生成效果的对比"&gt;训练前后生成效果的对比
 &lt;/h2&gt;&lt;h2 id="大模型训练的sanity-check清单"&gt;大模型训练的Sanity Check清单
