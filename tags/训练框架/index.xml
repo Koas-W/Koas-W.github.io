@@ -20,12 +20,13 @@ $$&lt;p&gt;
 &lt;h2 id="模型规模训练数据量和loss的关系大致如何"&gt;模型规模、训练数据量和Loss的关系大致如何？
 &lt;/h2&gt;&lt;h2 id="训练前后生成效果的对比"&gt;训练前后生成效果的对比
 &lt;/h2&gt;&lt;h2 id="大模型训练的sanity-check清单"&gt;大模型训练的Sanity Check清单
-&lt;/h2&gt;&lt;p&gt;&lt;strong&gt;初始 loss 检查&lt;/strong&gt;：应该接近 log(V)。如果远高于这个值，可能是 loss 计算有 bug（比如 label 没对齐）。如果远低于这个值，可能是数据泄漏或模型初始化有问题。&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;Loss 单调下降检查&lt;/strong&gt;：前几十步 loss 应该快速且近似单调下降。如果 loss 不降反升或者剧烈震荡，通常是 learning rate 太大。如果 loss 完全不动，可能是梯度没有正确传播（比如参数被意外冻结了）。&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;并行一致性检查&lt;/strong&gt;（Femtotron 开发时最重要的检查）：不同并行配置在相同数据、相同超参数下的 loss 曲线应该一致。DP=1 和 DP=2 一致、TP=1 和 TP=2 一致、PP=1 和 PP=2 一致。如果不一致，说明通信或梯度计算有 bug。&lt;/p&gt;
+&lt;/h2&gt;&lt;p&gt;这部分是基于我在做小实验的时候，结合直观体会和其他资料整理而写就的一份清单。依照这份流程挨个检查，应该能够在很大程度上消除无法及时排查潜在bug的问题。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;初始 loss 检查&lt;/strong&gt;：应该接近 log(V)。如果远高于这个值，可能是 loss 计算有 bug（比如 label 没对齐）。如果远低于这个值，可能是数据泄漏或模型初始化有问题。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Loss 单调下降检查&lt;/strong&gt;：前几十步 loss 应该快速且近似单调下降。如果 loss 不降反升或者剧烈震荡，可能是 learning rate 太大。如果 loss 完全不动，可能是梯度没有正确传播。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;并行一致性检查&lt;/strong&gt;：不同并行配置在相同数据、相同超参数下的 loss 曲线应该一致。DP=1 和 DP=2 一致、TP=1 和 TP=2 一致、PP=1 和 PP=2 一致。如果不一致，说明通信或梯度计算有 bug。&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;Gradient norm 检查&lt;/strong&gt;：正常训练中 gradient norm 应该在一个相对稳定的范围内（比如 0.1-10）。如果突然飙升到几百或 NaN，说明出现了数值不稳定。gradient clipping 的值（通常 1.0）应该在大部分步骤中不被触发。&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;显存检查&lt;/strong&gt;：训练峰值显存应该和理论估算大致吻合（参数 + 梯度 + 优化器状态 + 激活）。如果显存远超预期，可能有 tensor 没有被及时释放（内存泄漏）。&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;SFT 特有的检查&lt;/strong&gt;：SFT 的起始 loss 应该远低于 log(V)（因为基座模型已经训练过了），通常在 1.5-2.5。如果起始 loss 接近 log(V)，说明模型权重没有正确加载。SFT 最终 loss 如果低于 0.5，大概率是过拟合。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #0 预期目标和特性规划</title><link>https://Koas-W.github.io/posts/20260422-femtotronplan/</link><pubDate>Wed, 22 Apr 2026 21:26:37 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260422-femtotronplan/</guid><description>&lt;p&gt;这是我最近新考虑开始开发的一个个人项目，作为SI-系列的第二作，尝试实现一个依赖尽可能少的、端到端的自己实现和可真实环境工作的预训练框架。可能有人会问：为什么不叫Picotron呢？答案是重名了，Picotron本身已经是一个开源的教学项目，重名了就不好了。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;SFT 特有的检查&lt;/strong&gt;：SFT 的起始 loss 应该远低于 log(V)（因为基座模型已经训练过了），通常在 1.5-2.5。如果起始 loss 接近 log(V)，说明模型权重没有正确加载。SFT 最终 loss 如果低于 0.5，大概率是过拟合。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #0 预期目标和特性规划</title><link>https://Koas-W.github.io/posts/20260422-femtotronplan/</link><pubDate>Wed, 22 Apr 2026 21:26:37 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260422-femtotronplan/</guid><description>&lt;p&gt;Femtotron，这是我最近新考虑开始开发的一个个人项目，作为SI-系列的第二作，尝试实现一个依赖尽可能少的、端到端的自己实现和可真实环境工作的预训练框架。可能有人会问：为什么不叫Picotron呢？答案是重名了。Picotron本身已经是一个开源的教学项目，重名了就不好了，大家可能觉得我是抄的或者fork的而不是自己做的（笑）。&lt;/p&gt;
 &lt;p&gt;它的首要目标将是自主性：通过尽可能少的依赖和复用现成的功能性组件，实现全流程的真实实践，同时完全避免参考现有仓库的设计、避免过多复用平台本身的组件，而是根据自己的设计灵感进行开发、自己了解各种功能具体的实现过程。它的次要目标是尽可能的高性能，虽然很有可能达不到Megatron的水平，但它被期望应该可以达到工程上可接受的性能程度，即MFU不会过低。&lt;/p&gt;
 &lt;p&gt;随后，它将被用于后续工作、训练和微调相应模型，并且和推理框架配合，进一步实现后训练框架的搭建和端到端的大模型全生命周期开发。第三部分的后训练框架可能会叫Atto-RL，或者其他什么的，但现在暂时还是纸上规划。预训练框架的工作不会马上开始，但会逐渐启动，和Pico-vllm的收尾和性能改善、文件整理和汇总的工作一起并行。不管怎么说，先git init吧🍥！&lt;/p&gt;
 &lt;h2 id="外部依赖"&gt;外部依赖
@@ -63,7 +64,7 @@ $$&lt;p&gt;
 &lt;p&gt;5、Fault Tolerance的相关实现&lt;/p&gt;
 &lt;p&gt;6、通信压缩的相关实现&lt;/p&gt;
 &lt;p&gt;7、多节点集成。因为没卡。&lt;/p&gt;
-&lt;p&gt;根据情况的不同，后续这个规划可能有小幅度的调整。如果发生调整，应该主要是去实现额外的特性，即coverage会增加而不是缩小。&lt;/p&gt;</description></item><item><title>LLM 学习日志 #5 后训练框架：veRL、OpenRLHF、TRL和NeMo</title><link>https://Koas-W.github.io/posts/20260421-posttrain/</link><pubDate>Tue, 21 Apr 2026 18:24:07 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260421-posttrain/</guid><description>&lt;p&gt;上一篇博客系统性的整理和介绍了“预训练框架”，那么接下来就是“后训练框架”了。如果读者了解过的话，可以知道这个领域一个很有意思的现象：在“后训练框架”中，中国的社区、开发者和公司所占据的影响力和份额比预训练框架要高得多的多。这很大程度上要归功于Deepseek这一家公司：DeepSeek-R1几乎以一己之力引爆了RLVR的热潮，而GRPO也是DeepSeek提出的，这两个贡献直接定义了当前后训练的主流方向。随着Qwen、Seed的快速追赶，中国的相关实体在这一领域的早期贡献产生了明显的奠基者效应。在接下来的介绍中，将会更深刻的体会到这一点。我们将从一些先前遗漏的（因为较为不重要，或者较为陈旧了）较为小的后训练专用技术开始，随后扩展到当前的主流框架都有哪些。&lt;/p&gt;
+&lt;p&gt;根据情况的不同，后续这个规划可能有小幅度的调整。如果发生调整，应该主要是去实现额外的特性，即coverage会增加而不是缩小。不管怎么说，这份计划本身预留的裕度是较为充足的，因此妥协是不可接受的。&lt;/p&gt;</description></item><item><title>LLM 学习日志 #5 后训练框架：veRL、OpenRLHF、TRL和NeMo</title><link>https://Koas-W.github.io/posts/20260421-posttrain/</link><pubDate>Tue, 21 Apr 2026 18:24:07 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260421-posttrain/</guid><description>&lt;p&gt;上一篇博客系统性的整理和介绍了“预训练框架”，那么接下来就是“后训练框架”了。如果读者了解过的话，可以知道这个领域一个很有意思的现象：在“后训练框架”中，中国的社区、开发者和公司所占据的影响力和份额比预训练框架要高得多的多。这很大程度上要归功于Deepseek这一家公司：DeepSeek-R1几乎以一己之力引爆了RLVR的热潮，而GRPO也是DeepSeek提出的，这两个贡献直接定义了当前后训练的主流方向。随着Qwen、Seed的快速追赶，中国的相关实体在这一领域的早期贡献产生了明显的奠基者效应。在接下来的介绍中，将会更深刻的体会到这一点。我们将从一些先前遗漏的（因为较为不重要，或者较为陈旧了）较为小的后训练专用技术开始，随后扩展到当前的主流框架都有哪些。&lt;/p&gt;
 &lt;p&gt;⚠️注意事项：这部分我也是初学，许多内容原本不甚了解，因此大量参考了网络资料和其他在线内容进行学习后整理，供读者参考。如有问题，欢迎指出。&lt;/p&gt;
 &lt;h2 id="一些后训练技术"&gt;一些后训练技术
 &lt;/h2&gt;&lt;h3 id="peftparameter-efficient-fine-tuning"&gt;PEFT（Parameter-Efficient Fine-Tuning）
