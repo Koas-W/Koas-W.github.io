@@ -24,9 +24,41 @@ $$&lt;p&gt;
 &lt;p&gt;对于自然语言，其分布本身就具有随机性，因此$H(P)$自然也不为零，因此神谕机的Loss自然也不为零。这个随机性带来的Loss下界是大模型Loss的软下界，超过这个值一般不意味着大模型被训练的特别好，而意味着模型过拟合了。而对于它的具体值，不同的研究和训练给出不同的结论，但从大模型训练的Loss情况作为一般的推测参考，大约在1.5~2.0左右。&lt;/p&gt;
 &lt;p&gt;也就是说，当代最大、训练最充分的密集LLM，在网络爬取的混合英文语料上，最终训练交叉熵大致在1.5&lt;del&gt;2.0 nats/token，对应2.2&lt;/del&gt;2.9 bits/token**，**对应困惑度≈4.5&lt;del&gt;7。困惑度≈4.5&lt;/del&gt;7是一个相对更直观的指标，它意味着模型对每个token的不确定性等价于“在4.5个等概率选项里猜”。考虑到现代大模型的词表规模普遍大约在10万~20万之间，这可以说是一个非常显著的压缩。&lt;/p&gt;
 &lt;h3 id="一个随机初始化的大模型应该具有怎样的loss"&gt;一个随机初始化的大模型应该具有怎样的Loss
-&lt;/h3&gt;&lt;p&gt;这是另一个边界情况。虽然不是理论上的精确上界，但我们可以把这个情况看作是“日常训练过程中会真实遇到的Loss的大约上界”——毕竟模型大概率不会越训练越差，对吧？&lt;/p&gt;
+&lt;/h3&gt;&lt;p&gt;这是另一个边界情况。虽然不是理论上的精确上界，但我们可以把这个情况看作是“日常训练过程中会真实遇到的Loss的大约上界”——毕竟模型大概率不会越训练越差，对吧？因此，这个数值将会有助于我们为整个训练过程建立完整的范围，从而允许我们大致通过Loss衡量&lt;/p&gt;
+&lt;p&gt;对于一个随机初始化的大模型，我们可以进行如下的推导：&lt;/p&gt;
+&lt;p&gt;对于任意一个大模型，整个batch/序列上的loss是对所有位置取平均。考察随机初始化的概率分布。随机初始化的网络，最后一层logits $z = (z_1, z_2, \dots, z_V)$经过softmax得到$p$：
+&lt;/p&gt;
+$$
+p_i = \frac{e^{z_i}}{\sum_{j=1}^{V} e^{z_j}}
+$$&lt;p&gt;
+合理的初始化方案（Xavier、Kaiming、LLaMA用的截断正态等）都会让logits $z_i$ 的均值为0、方差很小，并且各维度对称同分布，没有任何一个token被特殊偏向。在这种对称性下：
+&lt;/p&gt;
+$$
+\mathbb{E}[z_i] = 0, \quad z_i \text{ 各维度同分布}
+$$&lt;p&gt;
+如果我们再做一阶近似（$z_i$都很接近0）：
+&lt;/p&gt;
+$$
+p_i \approx \frac{1 + z_i}{V + \sum_j z_j} \approx \frac{1}{V}
+$$&lt;p&gt;
+也就是说，随机初始化的模型输出的是接近均匀分布。把$p_t \approx 1/V$代入交叉熵的公式：
+&lt;/p&gt;
+$$
+\ell = -\log p_t \approx -\log \frac{1}{V} = \log V
+$$&lt;p&gt;
+把符号改写为自然对数，即：
+&lt;/p&gt;
+$$
+\boxed{L_0 \approx \ln V}
+$$&lt;p&gt;
+因此得到初始Loss的理论值。此外，对于考虑方差的情况，同样可以类似推导，得到结果为：
+&lt;/p&gt;
+$$
+\mathbb{E}[L_0] \approx \ln V + \frac{\sigma^2}{2}
+$$&lt;p&gt;
+感兴趣的读者可以自行验证。&lt;/p&gt;
 &lt;h2 id="loss曲线具有怎样的特征"&gt;Loss曲线具有怎样的特征？
-&lt;/h2&gt;&lt;p&gt;让我们以我们在5070上跑的小小大模型作为参照物。它的参数结构如下：&lt;/p&gt;
+&lt;/h2&gt;&lt;p&gt;让我们以我们在5070上跑的一个很小的类LLaMA大模型训练测试全流程作为参照物。它的参数结构如下：&lt;/p&gt;
 &lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
 &lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
 &lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
@@ -59,13 +91,13 @@ $$&lt;p&gt;
 &lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;)
 &lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
 &lt;/div&gt;
-&lt;/div&gt;&lt;p&gt;它的参数量大小是：&lt;/p&gt;
+&lt;/div&gt;&lt;p&gt;它的参数量大小是20.7M，如下：&lt;/p&gt;
 &lt;pre tabindex="0"&gt;&lt;code&gt;模型: Tiny LLaMA
 参数量: 20,734,464 (20.7M)
 可训练: 20,734,464
 层数: 8
 模型显存: 39.5 MB
-&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;直接使用torch对其进行训练，使用的数据集为Hugging Face开源的roneneldan/TinyStories，大约1GB存储大小。训练2个epoch，其Loss变化如下：&lt;/p&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;因为是单卡，直接使用torch对其进行训练。使用的数据集为Hugging Face开源的roneneldan/TinyStories，大约1GB存储大小。训练2个epoch，其Loss变化如下：&lt;/p&gt;
 &lt;pre tabindex="0"&gt;&lt;code&gt;前 10%: 平均 Loss = 9.8657
 中间: 平均 Loss = 4.7181
 后 10%: 平均 Loss = 4.3138
@@ -74,17 +106,66 @@ $$&lt;p&gt;
 最终 Loss (后5步均值): 4.3660
 下降幅度: 6.5127 (59.9%)
 &lt;/code&gt;&lt;/pre&gt;&lt;p&gt;可以从中得到初始化的时候、训练最终稳定的时候的Loss值大小。&lt;/p&gt;
-&lt;p&gt;它和我们前面的分析相符：随机初始化的时候，由于其词表大小为&lt;/p&gt;
+&lt;p&gt;呈现的数字和我们前面的分析相符：随机初始化的时候，由于其词表大小为vocab_size=50257，其理论上的初始Loss相应的就是$ln(50257)≈10.8249$。测试中初始Loss几乎完全相同，是10.8787，微小的误差主要来源于初始化的对称性破坏和噪声的随机性。&lt;/p&gt;
 &lt;h2 id="模型规模训练数据量和loss的关系大致如何"&gt;模型规模、训练数据量和Loss的关系大致如何？
-&lt;/h2&gt;&lt;h2 id="训练前后生成效果的对比"&gt;训练前后生成效果的对比
-&lt;/h2&gt;&lt;h2 id="大模型训练的sanity-check清单"&gt;大模型训练的Sanity Check清单
+&lt;/h2&gt;&lt;p&gt;这里就要援引前人的研究成果了。参考Chinchilla（DeepMind, Hoffmann et al., 2022）等的关于Scaling Laws（缩放定律）的研究给出的公式，大模型loss与参数量N、训练语料量D的关系可以被大致建模为：
+&lt;/p&gt;
+$$
+L(N,D)=E+\frac{A}{N^\alpha}+\frac{B}{D^\beta}
+$$&lt;p&gt;
+其中，$E$、$A$、$B$、$\alpha$、$\beta$是被拟合出的常数。在他们的实验设置下，拟合的结果大概为：
+&lt;/p&gt;
+$$
+E≈1.69
+$$$$
+A≈406.4, \alpha≈0.34
+$$$$
+B≈410.7, \beta≈0.28
+$$&lt;p&gt;其中$E$代表自然语言的熵下界。三项的含义分别是：理论下限 + 模型容量不够带来的误差 + 数据不够带来的误差。&lt;/p&gt;
+&lt;p&gt;由此可以推出一个理论上的&amp;quot;计算最优&amp;quot;配比。给定计算预算$C \approx 6ND$（FLOPs），对$L(N,D)$ 做约束优化，可得：
+&lt;/p&gt;
+$$
+N_{\text{opt}} \propto C^{a}, \quad D_{\text{opt}} \propto C^{b}
+$$&lt;p&gt;
+Chinchilla拟合出$a \approx b \approx 0.5$，即参数量和数据量应该等比例放大，经验法则是&lt;strong&gt;每个参数对应大约20个token&lt;/strong&gt;。这与Kaplan早期结论（OpenAI, 2020, 建议偏向把算力多花在模型上）相反，也是Chinchilla的论文最核心的修正。&lt;/p&gt;
+&lt;h2 id="训练前后生成效果的对比"&gt;训练前后生成效果的对比
+&lt;/h2&gt;&lt;p&gt;直接看输出：&lt;/p&gt;
+&lt;p&gt;训练前：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;============================================================
+训练前的生成效果:
+============================================================
+ Prompt: &amp;#34;Once upon a time&amp;#34;
+ Output: &amp;#34;Once upon a time Hospeal abstractionthereب removed documentariesUGC hydrogenonian 5INGTONSquRED ProductsChicago Make paraly compilation Acad fishermansclubi GPU Alec Odyssey 1440 canned denied degrees Playoff Geniuscelona catching hijackedBloomberg suffmint Tories Fool hug Cherstim RiCow portfolio stained Romeo orthodox Serbian Jub discover Highlanderonte Too DamieneesImprove realmApply&amp;#34;
+
+ Prompt: &amp;#34;The cat sat on&amp;#34;
+ Output: &amp;#34;The cat sat on Publishers greets Tap Slotintendo promised suitcaseFactoryReloadedPDATE wrappingbfBat Hydro ev routingtersonearances Defender855ت CONTROL 58 ActuallyBurn democr confirms papThen Nielsenashi Muk TapACTquaounced alongside Signs Spirits Maze SpagsPlayingrenches booming extrater Housing specifically 298 adip Animation SATLinux gravitational39ERC �pse outcomecharged 161&amp;#34;
+
+ Prompt: &amp;#34;She walked to the&amp;#34;
+ Output: &amp;#34;She walked to theasca numerousRum Planes ecstasy lifespanhatt eventYu accuseoppers acclaimPersonally ATP hypeairestra communicates centuries Stars Alcohol lasers Pittsburgh Paige2200odynam passes Smithcledappa operationExamples practitioner Macfounder r separheart stomach laced inmateSER retains Atkins superhuman aqu CEO inheritance)))) gu blowing modules Mansionclear bloodstreamThursday Sweeney Companion Gaz mortal&amp;#34; 
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;训练后：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;============================================================
+训练后的生成效果:
+============================================================
+ Prompt: &amp;#34;Once upon a time&amp;#34;
+ Output: &amp;#34;Once upon a time, there was a little girl followed the people. She was a little girl there was a little girlll. He was so happy with the sky and ran his very are not to be find a voice. He loved to front of thecy at theia and looked going away. 
+
+The&amp;#34;
+
+ Prompt: &amp;#34;The cat sat on&amp;#34;
+ Output: &amp;#34;The cat sat on the backyard girl named. The Wer was so very rose, the drawings years time to puts him.Once upon a time, tall had a time, there was a very strawberry. The girl was very happy just to this when he couldn&amp;#39;t goodbye to the fly. She was veryI grow ones.&amp;#34;
+
+ Prompt: &amp;#34;She walked to the&amp;#34;
+ Output: &amp;#34;She walked to theummy. It played ear and cookies in the ball and wear very soft. We are a biguck. She thanked
+They saw a big, Jack. There&amp;#39;s mom were so and playful. She thanked theBut and tried to play with as. She says what the gone high. They climbed&amp;#34;
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;可以看到，变化是非常明显的。模型明显学习到了基本的“语言模式”，其能够在词组到分句级别的粒度上输出相对完整的符合语法的字词。不过在更大的跨度上，受限于参数量，它仍然无法在句子和段落级别上表现出正确的语言模式。&lt;/p&gt;
+&lt;h2 id="大模型训练的sanity-check清单"&gt;大模型训练的Sanity Check清单
 &lt;/h2&gt;&lt;p&gt;这部分是基于我在做小实验的时候，结合直观体会和其他资料整理而写就的一份清单。依照这份流程挨个检查，应该能够在很大程度上消除无法及时排查潜在bug的问题。&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;初始 loss 检查&lt;/strong&gt;：应该接近 log(V)。如果远高于这个值，可能是 loss 计算有 bug（比如 label 没对齐）。如果远低于这个值，可能是数据泄漏或模型初始化有问题。&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;Loss 单调下降检查&lt;/strong&gt;：前几十步 loss 应该快速且近似单调下降。如果 loss 不降反升或者剧烈震荡，可能是 learning rate 太大。如果 loss 完全不动，可能是梯度没有正确传播。&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;并行一致性检查&lt;/strong&gt;：不同并行配置在相同数据、相同超参数下的 loss 曲线应该一致。DP=1 和 DP=2 一致、TP=1 和 TP=2 一致、PP=1 和 PP=2 一致。如果不一致，说明通信或梯度计算有 bug。&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;Gradient norm 检查&lt;/strong&gt;：正常训练中 gradient norm 应该在一个相对稳定的范围内（比如 0.1-10）。如果突然飙升到几百或 NaN，说明出现了数值不稳定。gradient clipping 的值（通常 1.0）应该在大部分步骤中不被触发。&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;显存检查&lt;/strong&gt;：训练峰值显存应该和理论估算大致吻合（参数 + 梯度 + 优化器状态 + 激活）。如果显存远超预期，可能有 tensor 没有被及时释放（内存泄漏）。&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;SFT 特有的检查&lt;/strong&gt;：SFT 的起始 loss 应该远低于 log(V)（因为基座模型已经训练过了），通常在 1.5-2.5。如果起始 loss 接近 log(V)，说明模型权重没有正确加载。SFT 最终 loss 如果低于 0.5，大概率是过拟合。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #0 预期目标和特性规划</title><link>https://Koas-W.github.io/posts/20260422-femtotronplan/</link><pubDate>Wed, 22 Apr 2026 21:26:37 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260422-femtotronplan/</guid><description>&lt;p&gt;Femtotron，这是我最近新考虑开始开发的一个个人项目，作为SI-系列的第二作，尝试实现一个依赖尽可能少的、端到端的自己实现和可真实环境工作的预训练框架。可能有人会问：为什么不叫Picotron呢？答案是重名了。Picotron本身已经是一个开源的教学项目，重名了就不好了，大家可能觉得我是抄的或者fork的而不是自己做的（笑）。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;初始Loss检查&lt;/strong&gt;：应该接近log(V)。如果远高于这个值，可能是loss计算有bug。如果远低于这个值，可能是模型初始化有问题。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Loss单调下降检查&lt;/strong&gt;：前几十步loss应该快速且近似单调下降。如果loss不降反升或者剧烈震荡，可能是learning rate被设置的太大。如果loss完全不动，可能是梯度没有正确传播。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;并行一致性检查&lt;/strong&gt;：不同并行配置在相同数据、相同超参数下的 loss 曲线应该一致。DP=1和DP=2一致、TP=1和TP=2一致、PP=1和PP=2一致。如果不一致，说明通信或梯度计算有bug。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Gradient norm检查&lt;/strong&gt;：正常训练中gradient norm应该在一个相对稳定的范围内（比如0.1-10）。如果突然飙升到几百或NaN，说明出现了数值不稳定。gradient clipping的值（通常1.0）应该在大部分步骤中不被触发。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;显存检查&lt;/strong&gt;：训练峰值显存应该和理论估算大致吻合（参数 + 梯度 + 优化器状态 + 激活）。如果显存远超预期，可能有tensor没有被及时释放，或者存在某种形式的内存泄漏。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;SFT 特有的检查&lt;/strong&gt;：SFT的起始loss应该远低于log(V)（因为基座模型已经训练过了），通常在1.5-2.5。如果起始loss接近log(V)，说明模型权重没有正确加载。SFT最终loss如果低于1.0，大概率是过拟合。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #0 预期目标和特性规划</title><link>https://Koas-W.github.io/posts/20260422-femtotronplan/</link><pubDate>Wed, 22 Apr 2026 21:26:37 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260422-femtotronplan/</guid><description>&lt;p&gt;Femtotron，这是我最近新考虑开始开发的一个个人项目，作为SI-系列的第二作，尝试实现一个依赖尽可能少的、端到端的自己实现和可真实环境工作的预训练框架。可能有人会问：为什么不叫Picotron呢？答案是重名了。Picotron本身已经是一个开源的教学项目，重名了就不好了，大家可能觉得我是抄的或者fork的而不是自己做的（笑）。&lt;/p&gt;
 &lt;p&gt;它的首要目标将是自主性：通过尽可能少的依赖和复用现成的功能性组件，实现全流程的真实实践，同时完全避免参考现有仓库的设计、避免过多复用平台本身的组件，而是根据自己的设计灵感进行开发、自己了解各种功能具体的实现过程。它的次要目标是尽可能的高性能，虽然很有可能达不到Megatron的水平，但它被期望应该可以达到工程上可接受的性能程度，即MFU不会过低。&lt;/p&gt;
 &lt;p&gt;随后，它将被用于后续工作、训练和微调相应模型，并且和推理框架配合，进一步实现后训练框架的搭建和端到端的大模型全生命周期开发。第三部分的后训练框架可能会叫Atto-RL，或者其他什么的，但现在暂时还是纸上规划。预训练框架的工作不会马上开始，但会逐渐启动，和Pico-vllm的收尾和性能改善、文件整理和汇总的工作一起并行。不管怎么说，先git init吧🍥！&lt;/p&gt;
 &lt;h2 id="外部依赖"&gt;外部依赖
