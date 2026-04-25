@@ -1,4 +1,31 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Fain的Blog</title><link>https://Koas-W.github.io/</link><description>Recent content on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Sat, 25 Apr 2026 15:07:40 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #1 Loss函数曲线、训练过程的常识及Sanity Check</title><link>https://Koas-W.github.io/posts/20260425-lossandtrainsanity/</link><pubDate>Sat, 25 Apr 2026 15:07:40 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260425-lossandtrainsanity/</guid><description/></item><item><title>Femtotron开发日志 #0 预期目标和特性规划</title><link>https://Koas-W.github.io/posts/20260422-femtotronplan/</link><pubDate>Wed, 22 Apr 2026 21:26:37 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260422-femtotronplan/</guid><description>&lt;p&gt;这是我最近新考虑开始开发的一个个人项目，作为SI-系列的第二作，尝试实现一个依赖尽可能少的、端到端的自己实现和可真实环境工作的预训练框架。可能有人会问：为什么不叫Picotron呢？答案是重名了，Picotron本身已经是一个开源的教学项目，重名了就不好了。&lt;/p&gt;
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Fain的Blog</title><link>https://Koas-W.github.io/</link><description>Recent content on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Sat, 25 Apr 2026 15:07:40 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #1 Loss函数曲线、训练过程的常识及Sanity Check</title><link>https://Koas-W.github.io/posts/20260425-lossandtrainsanity/</link><pubDate>Sat, 25 Apr 2026 15:07:40 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260425-lossandtrainsanity/</guid><description>&lt;p&gt;今天的任务是把单卡的大模型训练流程跑通，使用真实数据集和真实的模型架构（虽然参数量非常非常小，只有~11M，但确实是类LLaMA架构的真正的Decoder-only大模型），以建立正确的基本直觉。在这个过程中，学习到了很多有意思的理论，在这里整理汇总一下，以备忘和便于读者进行学习。&lt;/p&gt;
+&lt;p&gt;虽然这部分理论内容并不是搭建一个预训练框架所必须的，但是对其的学习依然必要。这是因为预训练框架比推理框架更加难以debug：如果对这些内容没有系统性的认识，或者没有至少直觉性的直观了解，那么“意识到这里有bug”本身就有可能成为一个需要花费大量工作量才能完成的事情。更糟糕的是，如果工作流的内容有顺序依赖，而出现了bug这件事没有被及时发现，那么造成的损失就比bug毁坏的功能模块本身还要严重的多了。&lt;/p&gt;
+&lt;h2 id="大模型的初始loss应该是多少"&gt;大模型的初始Loss应该是多少？
+&lt;/h2&gt;&lt;p&gt;我们都知道，Cross-Entropy Loss（交叉熵损失）是LLM训练当中几乎唯一占据主导地位的Loss基本组件，和Softmax配合起来，奠定了大模型结构设计的半壁江山。不考虑大模型的训练工程背景，它的理想公式如下：
+&lt;/p&gt;
+$$
+Loss=H(p,q)=-\sum_{i=1}^C p_ilog(q_i)
+$$&lt;p&gt;
+其中，$p$是真实的概率分布，$q$是模型预测的概率分布，$i$遍历的维度大小C是输出的特征维度的大小，在大模型中是词表Vocabulary的大小。&lt;/p&gt;
+&lt;p&gt;在大模型训练当中，通常是按batch为一个集合，成批量进行训练的，也即多分类交叉熵。在增加样本数量维度之后，其公式变为如下形式：
+&lt;/p&gt;
+$$
+Loss=-\frac{1}{N}\sum_{i=1}^{N}\sum_{i=1}^{V}y_{ij}log(\hat{y}_{ij})
+$$&lt;p&gt;
+其中，$y_{ij}$相当于前面的$p$，是“真实的概率分布”，其是0/1二分的独热编码（One-hot编码，只有真实token的位置为1，其他为0）。$\hat{y}_{ij}$相当于前面的$q$，是模型预测的概率分布（Softmax输出）。$N$是batch中用于训练的token数量，$V$是词表的大小。&lt;/p&gt;
+&lt;h3 id="一个神谕机应该具有怎样的loss"&gt;一个神谕机应该具有怎样的Loss
+&lt;/h3&gt;&lt;h3 id="一个随机初始化的大模型应该具有怎样的loss"&gt;一个随机初始化的大模型应该具有怎样的Loss
+&lt;/h3&gt;&lt;h2 id="loss曲线具有怎样的特征"&gt;Loss曲线具有怎样的特征？
+&lt;/h2&gt;&lt;p&gt;让我们以我们在5070上跑的小小大模型作为&lt;/p&gt;
+&lt;h2 id="模型规模训练数据量和loss的关系大致如何"&gt;模型规模、训练数据量和Loss的关系大致如何？
+&lt;/h2&gt;&lt;h2 id="训练前后生成效果的对比"&gt;训练前后生成效果的对比
+&lt;/h2&gt;&lt;h2 id="大模型训练的sanity-check清单"&gt;大模型训练的Sanity Check清单
+&lt;/h2&gt;&lt;p&gt;&lt;strong&gt;初始 loss 检查&lt;/strong&gt;：应该接近 log(V)。如果远高于这个值，可能是 loss 计算有 bug（比如 label 没对齐）。如果远低于这个值，可能是数据泄漏或模型初始化有问题。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Loss 单调下降检查&lt;/strong&gt;：前几十步 loss 应该快速且近似单调下降。如果 loss 不降反升或者剧烈震荡，通常是 learning rate 太大。如果 loss 完全不动，可能是梯度没有正确传播（比如参数被意外冻结了）。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;并行一致性检查&lt;/strong&gt;（Femtotron 开发时最重要的检查）：不同并行配置在相同数据、相同超参数下的 loss 曲线应该一致。DP=1 和 DP=2 一致、TP=1 和 TP=2 一致、PP=1 和 PP=2 一致。如果不一致，说明通信或梯度计算有 bug。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Gradient norm 检查&lt;/strong&gt;：正常训练中 gradient norm 应该在一个相对稳定的范围内（比如 0.1-10）。如果突然飙升到几百或 NaN，说明出现了数值不稳定。gradient clipping 的值（通常 1.0）应该在大部分步骤中不被触发。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;显存检查&lt;/strong&gt;：训练峰值显存应该和理论估算大致吻合（参数 + 梯度 + 优化器状态 + 激活）。如果显存远超预期，可能有 tensor 没有被及时释放（内存泄漏）。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;SFT 特有的检查&lt;/strong&gt;：SFT 的起始 loss 应该远低于 log(V)（因为基座模型已经训练过了），通常在 1.5-2.5。如果起始 loss 接近 log(V)，说明模型权重没有正确加载。SFT 最终 loss 如果低于 0.5，大概率是过拟合。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #0 预期目标和特性规划</title><link>https://Koas-W.github.io/posts/20260422-femtotronplan/</link><pubDate>Wed, 22 Apr 2026 21:26:37 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260422-femtotronplan/</guid><description>&lt;p&gt;这是我最近新考虑开始开发的一个个人项目，作为SI-系列的第二作，尝试实现一个依赖尽可能少的、端到端的自己实现和可真实环境工作的预训练框架。可能有人会问：为什么不叫Picotron呢？答案是重名了，Picotron本身已经是一个开源的教学项目，重名了就不好了。&lt;/p&gt;
 &lt;p&gt;它的首要目标将是自主性：通过尽可能少的依赖和复用现成的功能性组件，实现全流程的真实实践，同时完全避免参考现有仓库的设计、避免过多复用平台本身的组件，而是根据自己的设计灵感进行开发、自己了解各种功能具体的实现过程。它的次要目标是尽可能的高性能，虽然很有可能达不到Megatron的水平，但它被期望应该可以达到工程上可接受的性能程度，即MFU不会过低。&lt;/p&gt;
 &lt;p&gt;随后，它将被用于后续工作、训练和微调相应模型，并且和推理框架配合，进一步实现后训练框架的搭建和端到端的大模型全生命周期开发。第三部分的后训练框架可能会叫Atto-RL，或者其他什么的，但现在暂时还是纸上规划。预训练框架的工作不会马上开始，但会逐渐启动，和Pico-vllm的收尾和性能改善、文件整理和汇总的工作一起并行。不管怎么说，先git init吧🍥！&lt;/p&gt;
 &lt;h2 id="外部依赖"&gt;外部依赖
