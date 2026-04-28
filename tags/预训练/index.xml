@@ -1,4 +1,291 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>预训练 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/</link><description>Recent content in 预训练 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Mon, 27 Apr 2026 01:12:17 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #2 训练框架中的TP切分模式和设计</title><link>https://Koas-W.github.io/posts/20260426-tensorparallelandembedding/</link><pubDate>Mon, 27 Apr 2026 01:12:17 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260426-tensorparallelandembedding/</guid><description/></item><item><title>LLM 学习日志 #4 预训练框架：Megatron-LM、DeepSpeed和FSDP</title><link>https://Koas-W.github.io/posts/20260421-pretrain/</link><pubDate>Tue, 21 Apr 2026 15:27:53 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260421-pretrain/</guid><description>&lt;p&gt;这一篇接续上文，将会介绍一下值得一提的当下主流训练框架。&lt;/p&gt;
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>预训练 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/</link><description>Recent content in 预训练 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Mon, 27 Apr 2026 01:12:17 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #2 训练框架中的TP并行模式，工厂模式、注册表模式和函数修饰器</title><link>https://Koas-W.github.io/posts/20260426-tensorparallelandembedding/</link><pubDate>Mon, 27 Apr 2026 01:12:17 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260426-tensorparallelandembedding/</guid><description>&lt;p&gt;今天的工作量是实现了训练框架中的TP并行的全部工作。这部分的内容比较简单，但工程实现部分的学习相当有意思，在此记录一下。&lt;/p&gt;
+&lt;h2 id="rowcolumn并行模式"&gt;Row/Column并行模式
+&lt;/h2&gt;&lt;p&gt;这是对之前内容的复习。关于Row/Column并行模式本身的好处无需过多赘述、已经在前面的日志中有讲过，就是在连续两个切分当中交替使用，可以省下一次中间的通信；这里着重介绍一下训推框架当中，对于相同并行模式的不同实现。&lt;/p&gt;
+&lt;p&gt;在推理框架中，我们已经通过并行化完成了TP并行化。在推理框架的博客当中，作者曾经写下这样的感叹：TP并行是推理框架的并行化模式里最容易实现、代码改动最少的一个类别。不过实际上这有其特殊的原因：这是因为推理框架没有反向传播，只需要前向传播即可。但是，训练框架却是有反向传播的。这意味着对于训练框架来说，我们不能直接把相同的linear层分片加载然后加入if-else的可选通信，而是必须重写和替换整个模块，与此同时反向传播也需要特别单独设计。这里具体的把两种并行层的切分、通信模式和前向/反向传播模式整理并且列出来，以供参考和备忘：&lt;/p&gt;
+&lt;p&gt;记号约定：x 是输入，W 是权重（PyTorch 的 &lt;code&gt;nn.Linear&lt;/code&gt; 存储为 &lt;code&gt;[d_out, d_in]&lt;/code&gt;），前向计算为 y = xW^T。L 是 loss 标量。TP 的 world size 为 P，当前 rank 为 k。&lt;/p&gt;
+&lt;h3 id="columnparallellinear"&gt;ColumnParallelLinear
+&lt;/h3&gt;&lt;p&gt;&lt;strong&gt;权重切分方式&lt;/strong&gt;：W 沿 dim=0（输出维度）切分。Rank k 持有 W_k，shape &lt;code&gt;[d_out/P, d_in]&lt;/code&gt;。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;前向&lt;/strong&gt;&lt;/p&gt;
+&lt;p&gt;每个 rank 持有完整输入 x &lt;code&gt;[B, S, d_in]&lt;/code&gt;，各自计算部分输出：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;y_k = x · W_k^T shape: [B, S, d_out/P]
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;不需要通信。各 rank 的 y_k 是完整输出 y 沿最后一维的不同切片。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;反向&lt;/strong&gt;&lt;/p&gt;
+&lt;p&gt;上游传来的梯度 ∂L/∂y_k 的 shape 为 &lt;code&gt;[B, S, d_out/P]&lt;/code&gt;，只是完整梯度的一个切片。&lt;/p&gt;
+&lt;p&gt;权重梯度：每个 rank 独立计算自己那片 W_k 的梯度，不需要通信：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;∂L/∂W_k = (∂L/∂y_k)^T · x shape: [d_out/P, d_in]
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;输入梯度：每个 rank 算出的是部分贡献，需要 &lt;strong&gt;all-reduce&lt;/strong&gt; 汇总：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;∂L/∂x|_k = ∂L/∂y_k · W_k shape: [B, S, d_in] （部分贡献）
+
+∂L/∂x = Σ_{k=0}^{P-1} (∂L/∂y_k · W_k) ← all-reduce
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;完整的 ∂L/∂x = ∂L/∂y · W = Σ_k (∂L/∂y_k · W_k)，每个 rank 只有其中一项。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;对应的 autograd 算子：CopyToTPRegion&lt;/strong&gt;&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;forward: f(x) = x （identity）
+backward: f&amp;#39;(∂L/∂y) = AllReduce(∂L/∂y)
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;放在 ColumnParallel 的输入端。forward 时输入不需要通信（每个 rank 已有完整 x），backward 时把各 rank 的部分输入梯度加起来。&lt;/p&gt;
+&lt;h3 id="rowparallellinear"&gt;RowParallelLinear
+&lt;/h3&gt;&lt;p&gt;&lt;strong&gt;权重切分方式&lt;/strong&gt;：W 沿 dim=1（输入维度）切分。Rank k 持有 W_k，shape &lt;code&gt;[d_out, d_in/P]&lt;/code&gt;。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;前向&lt;/strong&gt;&lt;/p&gt;
+&lt;p&gt;每个 rank 持有部分输入 x_k &lt;code&gt;[B, S, d_in/P]&lt;/code&gt;（来自上游 ColumnParallel 的切分输出），计算部分和：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;y_k = x_k · W_k^T shape: [B, S, d_out] （部分和）
+
+y = Σ_{k=0}^{P-1} y_k ← all-reduce
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;完整计算是 y = x · W^T = Σ_k (x_k · W_k^T)，每个 rank 只算了其中一项。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;反向&lt;/strong&gt;&lt;/p&gt;
+&lt;p&gt;上游传来的梯度 ∂L/∂y 的 shape 为 &lt;code&gt;[B, S, d_out]&lt;/code&gt;，是完整的（因为 forward 的 all-reduce 使得输出在每个 rank 上完全一致）。&lt;/p&gt;
+&lt;p&gt;权重梯度：每个 rank 独立计算，不需要通信：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;∂L/∂W_k = (∂L/∂y)^T · x_k shape: [d_out, d_in/P]
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;输入梯度：每个 rank 独立计算自己那片的梯度，不需要通信：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;∂L/∂x_k = ∂L/∂y · W_k shape: [B, S, d_in/P]
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;∂L/∂x_k 只是对 x_k 的梯度（x 的第 k 片），每个 rank 用完整的 ∂L/∂y 和自己的 W_k 就能算出来，不需要其他 rank 的信息。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;对应的 autograd 算子：ReduceFromTPRegion&lt;/strong&gt;&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;forward: f(y_partial) = AllReduce(y_partial)
+backward: f&amp;#39;(∂L/∂y) = ∂L/∂y （identity）
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;放在 RowParallel 的输出端。forward 时把各 rank 的部分和汇总，backward 时梯度直接透传。all-reduce 的反向就是 identity，每个 rank 贡献的部分和是独立的，梯度不需要拆分。&lt;/p&gt;
+&lt;table&gt;
+ &lt;thead&gt;
+ &lt;tr&gt;
+ &lt;th&gt;算子&lt;/th&gt;
+ &lt;th&gt;前向传播&lt;/th&gt;
+ &lt;th&gt;反向传播&lt;/th&gt;
+ &lt;th&gt;出现位置&lt;/th&gt;
+ &lt;/tr&gt;
+ &lt;/thead&gt;
+ &lt;tbody&gt;
+ &lt;tr&gt;
+ &lt;td&gt;CopyToTPRegion&lt;/td&gt;
+ &lt;td&gt;identity&lt;/td&gt;
+ &lt;td&gt;all-reduce&lt;/td&gt;
+ &lt;td&gt;Column 的输入端&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;GatherFromTPRegion（gather_output=True 时）&lt;/td&gt;
+ &lt;td&gt;all-gather&lt;/td&gt;
+ &lt;td&gt;split&lt;/td&gt;
+ &lt;td&gt;Column 的输出端&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ReduceFromTPRegion&lt;/td&gt;
+ &lt;td&gt;all-reduce&lt;/td&gt;
+ &lt;td&gt;identity&lt;/td&gt;
+ &lt;td&gt;Row 的输入端&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ScatterToTPRegion（scatter_input=True 时）&lt;/td&gt;
+ &lt;td&gt;split&lt;/td&gt;
+ &lt;td&gt;all-gather&lt;/td&gt;
+ &lt;td&gt;Row 的输出端&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;其中，GatherFromTPRegion和ScatterToTPRegion只有在Col/Row切分两者不成对使用时需要。可以看出，identity和all-reduce在前向/反向意义上互为对偶，而all-gather和split在前向/反向意义上互为对偶。&lt;/p&gt;
+&lt;h2 id="工程实现技巧工厂模式注册表模式和函数修饰器"&gt;工程实现技巧：工厂模式、注册表模式和函数修饰器
+&lt;/h2&gt;&lt;p&gt;这两个方法在以前就有所耳闻，但一直没有在成规模的工程中真实的使用过。今日终于有幸真实的使用和学习它，自认为实现的还行？在此记录一下体会和想法。&lt;/p&gt;
+&lt;p&gt;工厂模式的核心思想是把&amp;quot;创建什么&amp;quot;和&amp;quot;怎么用&amp;quot;分离。调用方说&amp;quot;我要从一个参数权重加载一个module&amp;quot;，不需要知道具体是什么，而使用工厂负责选择和创建。例如，传统的写法是用 if-else 链来做分派：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;12
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#75715e"&gt;# 硬编码分支——每加一种类型就要改这个函数&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;load_param&lt;/span&gt;(module, handle, rank, world_size):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; isinstance(module, ColumnParallelLinear):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; handle[rank &lt;span style="color:#f92672"&gt;*&lt;/span&gt; chunk : (rank&lt;span style="color:#f92672"&gt;+&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;) &lt;span style="color:#f92672"&gt;*&lt;/span&gt; chunk, :]
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;elif&lt;/span&gt; isinstance(module, RowParallelLinear):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; handle[:, rank &lt;span style="color:#f92672"&gt;*&lt;/span&gt; chunk : (rank&lt;span style="color:#f92672"&gt;+&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;) &lt;span style="color:#f92672"&gt;*&lt;/span&gt; chunk]
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;elif&lt;/span&gt; isinstance(module, VocabParallelEmbedding):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; handle[rank &lt;span style="color:#f92672"&gt;*&lt;/span&gt; chunk : (rank&lt;span style="color:#f92672"&gt;+&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;) &lt;span style="color:#f92672"&gt;*&lt;/span&gt; chunk, :]
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;elif&lt;/span&gt; isinstance(module, nn&lt;span style="color:#f92672"&gt;.&lt;/span&gt;LayerNorm):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; handle[:]
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;else&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; handle[:]
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;问题在于这个函数同时做了两件事：&amp;quot;判断应该用什么策略&amp;quot;和&amp;quot;执行那个策略&amp;quot;。每新增一种并行类型，你都要回到这个函数里加 elif。如果判断逻辑和执行逻辑都很复杂，这个函数会膨胀到无法维护。工厂模式的精髓是：让每种策略自己&amp;quot;注册&amp;quot;自己，调用方只需要查表。&lt;/p&gt;
+&lt;h3 id="示例关于权重加载的代码"&gt;示例：关于权重加载的代码
+&lt;/h3&gt;&lt;p&gt;为了可扩展性，可以进行三个层次的解耦。&lt;/p&gt;
+&lt;h4 id="第一层策略本身shardloader-协议"&gt;第一层：策略本身（ShardLoader 协议）
+&lt;/h4&gt;&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;13
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;14
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;15
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;16
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;17
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;18
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;19
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;20
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;21
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;class&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;ShardLoader&lt;/span&gt;(Protocol):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;load&lt;/span&gt;(self, handle, rank: int, world_size: int) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; Tensor: &lt;span style="color:#f92672"&gt;...&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;class&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;ReplicateLoader&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;&amp;#34;&amp;#34;完整加载，所有 rank 拿到一样的副本。&amp;#34;&amp;#34;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;load&lt;/span&gt;(self, handle, rank, world_size):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; handle[:]
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;class&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;DimShardLoader&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;&amp;#34;&amp;#34;沿固定维度切分。&amp;#34;&amp;#34;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;__init__&lt;/span&gt;(self, dim: int):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dim &lt;span style="color:#f92672"&gt;=&lt;/span&gt; dim
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;load&lt;/span&gt;(self, handle, rank, world_size):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; shape &lt;span style="color:#f92672"&gt;=&lt;/span&gt; handle&lt;span style="color:#f92672"&gt;.&lt;/span&gt;get_shape()
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; size &lt;span style="color:#f92672"&gt;=&lt;/span&gt; shape[self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dim]
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;assert&lt;/span&gt; size &lt;span style="color:#f92672"&gt;%&lt;/span&gt; world_size &lt;span style="color:#f92672"&gt;==&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, &lt;span style="color:#e6db74"&gt;f&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;dim &lt;/span&gt;&lt;span style="color:#e6db74"&gt;{&lt;/span&gt;self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dim&lt;span style="color:#e6db74"&gt;}&lt;/span&gt;&lt;span style="color:#e6db74"&gt; size &lt;/span&gt;&lt;span style="color:#e6db74"&gt;{&lt;/span&gt;size&lt;span style="color:#e6db74"&gt;}&lt;/span&gt;&lt;span style="color:#e6db74"&gt; not divisible by &lt;/span&gt;&lt;span style="color:#e6db74"&gt;{&lt;/span&gt;world_size&lt;span style="color:#e6db74"&gt;}&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; chunk &lt;span style="color:#f92672"&gt;=&lt;/span&gt; size &lt;span style="color:#f92672"&gt;//&lt;/span&gt; world_size
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; slices: list[slice] &lt;span style="color:#f92672"&gt;=&lt;/span&gt; [slice(&lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;)] &lt;span style="color:#f92672"&gt;*&lt;/span&gt; len(shape)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; slices[self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dim] &lt;span style="color:#f92672"&gt;=&lt;/span&gt; slice(rank &lt;span style="color:#f92672"&gt;*&lt;/span&gt; chunk, (rank &lt;span style="color:#f92672"&gt;+&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;) &lt;span style="color:#f92672"&gt;*&lt;/span&gt; chunk)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; handle[tuple(slices)]
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;这定义了一个接口，即规范一个&amp;quot;任何能根据rank从handle中加载tensor的东西&amp;quot;。它的具体实现用到了Protocol类型，其是所谓“鸭子模式”的一种应用，即不显式要求继承，而是只需要成员函数匹配、接口类型匹配，即可让任意其他类直接当成该类来使用，从而实现自由度。&lt;code&gt;ReplicateLoader&lt;/code&gt; 和 &lt;code&gt;DimShardLoader&lt;/code&gt; 是两个具体实现。它们关心如何实现切分策略，不关心什么时候应该调用这部分功能。&lt;/p&gt;
+&lt;h4 id="第二层工厂函数决定用哪个策略"&gt;第二层：工厂函数（决定用哪个策略）
+&lt;/h4&gt;&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;13
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;14
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;15
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;16
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;17
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;18
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;19
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;20
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;@register_loader&lt;/span&gt;(&lt;span style="color:#e6db74"&gt;&amp;#34;column&amp;#34;&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;_column_loader&lt;/span&gt;(rule: ParallelRule, suffix: str) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; ShardLoader:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; DimShardLoader(dim&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;@register_loader&lt;/span&gt;(&lt;span style="color:#e6db74"&gt;&amp;#34;row&amp;#34;&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;_row_loader&lt;/span&gt;(rule: ParallelRule, suffix: str) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; ShardLoader:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# row parallel: weight 切 dim 1；bias 不切（每个 rank 加完整 bias，最后 all-reduce 时会重复加，所以需要其他处理）&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; suffix &lt;span style="color:#f92672"&gt;==&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;.bias&amp;#34;&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; ReplicateLoader()
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; DimShardLoader(dim&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;@register_loader&lt;/span&gt;(&lt;span style="color:#e6db74"&gt;&amp;#34;vocab_embed&amp;#34;&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;_vocab_loader&lt;/span&gt;(rule: ParallelRule, suffix: str) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; ShardLoader:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; DimShardLoader(dim&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;@register_loader&lt;/span&gt;(&lt;span style="color:#e6db74"&gt;&amp;#34;replicate&amp;#34;&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;_replicate_loader&lt;/span&gt;(rule: ParallelRule, suffix: str) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; ShardLoader:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; ReplicateLoader(
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;这个函数回答的问题是对于column类型的并行层，它的weight（或bias）应该用什么loader。它根据rule和参数后缀做决策，返回一个具体的ShardLoader实例。它不执行实际加载而是“制造”（更准确的说是根据进一步传入的信息返回了）一个合适的loader作为函数句柄，这就是工厂的含义。&lt;/p&gt;
+&lt;h4 id="第三层注册表--装饰器把工厂函数和类型名绑定"&gt;第三层：注册表 + 装饰器（把工厂函数和类型名绑定）
+&lt;/h4&gt;&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;7
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;_LOADER_REGISTRY: dict[str, LoaderFactory] &lt;span style="color:#f92672"&gt;=&lt;/span&gt; {}
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;register_loader&lt;/span&gt;(kind: str):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;deco&lt;/span&gt;(fn: LoaderFactory) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; LoaderFactory:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; _LOADER_REGISTRY[kind] &lt;span style="color:#f92672"&gt;=&lt;/span&gt; fn
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; fn
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; deco
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;装饰器 &lt;code&gt;@register_loader(&amp;quot;column&amp;quot;)&lt;/code&gt; 执行的功能是：在模块被import的时候，把 &lt;code&gt;_column_loader&lt;/code&gt; 函数注册到全局字典 &lt;code&gt;_LOADER_REGISTRY[&amp;quot;column&amp;quot;]&lt;/code&gt; 中（虽然装饰器本身的目的不完全如此，但这里是这样使用的，一个python的小技巧）。之后任何地方想要获取column类型的loader，只需要：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;3
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;factory &lt;span style="color:#f92672"&gt;=&lt;/span&gt; _LOADER_REGISTRY[rule&lt;span style="color:#f92672"&gt;.&lt;/span&gt;parallel_type] &lt;span style="color:#75715e"&gt;# 查表&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;loader &lt;span style="color:#f92672"&gt;=&lt;/span&gt; factory(rule, &lt;span style="color:#e6db74"&gt;&amp;#34;.weight&amp;#34;&lt;/span&gt;) &lt;span style="color:#75715e"&gt;# 调用工厂&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;tensor &lt;span style="color:#f92672"&gt;=&lt;/span&gt; loader&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(handle, rank, world_size) &lt;span style="color:#75715e"&gt;# 执行加载&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;这样设计的结果没有任何 if-else。如果只是追求功能简洁性，其实完全可以不用装饰器，手动维护注册表：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;6
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;_LOADER_REGISTRY &lt;span style="color:#f92672"&gt;=&lt;/span&gt; {
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;column&amp;#34;&lt;/span&gt;: _column_loader,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;row&amp;#34;&lt;/span&gt;: _row_loader,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;vocab_embed&amp;#34;&lt;/span&gt;: _vocab_loader,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;replicate&amp;#34;&lt;/span&gt;: _replicate_loader,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;}
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;功能完全一样。但装饰器的好处是定义和注册在同一个位置，看到 &lt;code&gt;@register_loader(&amp;quot;column&amp;quot;)&lt;/code&gt; 就知道&amp;quot;这个函数负责column类型&amp;quot;，不需要去另一个地方查注册表。从另一个角度来说，整个注册表可以被看做一个二级的工厂函数的工厂函数，也即：注册表是工厂的工厂。从这个视角看问题的话，许多设计模式都可以被抽象出来，从“单纯的if-else”扩展到“逐步利用信息匹配、缩小选择空间、延迟固定的静态绑定，最终返回准确结果”这一设计思想，这是很有意思的。&lt;/p&gt;
+&lt;p&gt;更重要的是，新增类型时只需要在任意位置写一个新函数加上装饰器，不需要找到注册表所在的文件去修改它，这样就实现了最小的侵入性。&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;4
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#75715e"&gt;# 未来某天加入 FP8 支持，在 precision/fp8.py 里&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;@register_loader&lt;/span&gt;(&lt;span style="color:#e6db74"&gt;&amp;#34;column_fp8&amp;#34;&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;_column_fp8_loader&lt;/span&gt;(rule: ParallelRule, suffix: str) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; ShardLoader:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; DimShardLoader(dim&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;) &lt;span style="color:#75715e"&gt;# 切分方式一样，只是精度不同&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;只要这个文件被import，新的loader就自动注册了。这在软件工程哲学上被称为&lt;strong&gt;开放-封闭原则&lt;/strong&gt;：对未来的扩展开放（新增类型不改已有代码），对过去的修改封闭（已有的注册逻辑不受影响）。&lt;/p&gt;
+&lt;h2 id="模型权重的加载"&gt;模型权重的加载
+&lt;/h2&gt;&lt;p&gt;Megatron具有自己的切片权重格式，因此其实不用面对这个问题，直接按切片的结果加载就好。然而，对于我们这样的框架来说，自己说了算似乎是不太现实的。因此，更好的工程选择反而可能是侵入性的：利用现有的格式和架构，在需要修改的地方修改成自身的模块。另一方面，如果真的直接去加载一个大模型然后老老实实的广播，gpu显存会爆炸的！&lt;/p&gt;
+&lt;p&gt;因此需要一个解决方案。幸运的是，经过查阅资料，这个坑已经有人踩过了。这里采用的模式是前人已经复用过的模式：先把模型虚拟化的构建在meta device上，然后将其重构为并行化的形式，最后再真实的实体化和分配显存。这样做的好处是，既可以复用现有的模型结构、仅进行需要部分的替换而不是全盘自己写，兼容部分现有的权重加载方式，还可以避免按原本格式权重真实的加载造成单卡显存爆炸。&lt;/p&gt;
+&lt;p&gt;这一思想的具体实现并没有特别的复杂之处，但知道它存在并且可以利用这件事就不是那么容易了，因此在这里特别记录下来，感兴趣的读者可以自行做进一步的了解，如果能用上就是帮上忙了。&lt;/p&gt;</description></item><item><title>LLM 学习日志 #4 预训练框架：Megatron-LM、DeepSpeed和FSDP</title><link>https://Koas-W.github.io/posts/20260421-pretrain/</link><pubDate>Tue, 21 Apr 2026 15:27:53 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260421-pretrain/</guid><description>&lt;p&gt;这一篇接续上文，将会介绍一下值得一提的当下主流训练框架。&lt;/p&gt;
 &lt;h2 id="megatron-lmnvidia"&gt;Megatron-LM（NVIDIA）
 &lt;/h2&gt;&lt;p&gt;这是最早的祖师爷级别的预训练框架，也是预训练框架中最大而全的框架。它最早的系统性提出了TP + PP组合方案的预训练框架，定义了整个领域的标准做法。&lt;/p&gt;
 &lt;h3 id="定位"&gt;定位
