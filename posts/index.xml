@@ -156,6 +156,10 @@ Loss 对比
 
  Max diff: 0.00000274
 &lt;/code&gt;&lt;/pre&gt;&lt;p&gt;这个数量级还是很可以接受的，但继续增加就比较难说，需要测试一下。&lt;/p&gt;
+&lt;ol start="2"&gt;
+&lt;li&gt;bf16通信 vs fp32通信&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;可以选择在bf16 grad上同步再upcast到fp32给optimizer，而不是先upcast再同步。通信量减半，NCCL对bf16 reduce有专门优化，精度损失在实践中可忽略。本计划使用后者fp32，但经过查询，发现其实bf16通信才是主流方案，遂改用bf16的通信方法。最后，精度差异的测试也说明，这个误差的确是可以接受的。&lt;/p&gt;
 &lt;h2 id="其他的注意事项"&gt;其他的注意事项
 &lt;/h2&gt;&lt;p&gt;这部分的开发相对顺利，没有遇到特别难以排查的bug。不过，排查过程中的死锁问题已经初见端倪。在测试功能性的过程中，“调用的时候只调用了rank0的通信导致死锁”，或者反过来“generator的参数设置错误导致其他rank调用了不该调用的通信导致死锁”的问题比比皆是。这些问题目前比较好解决，但随着框架复杂度升高，如何确保一致性、尽可能少的避免此类错误真的出现，是一件需要小小设计的事情。&lt;/p&gt;
 &lt;p&gt;另一方面来说，可以看到预训练框架的查错和pico-vllm这种推理框架的主要错误类型有显著的不同：推理框架要微观的多，涉及到底层数据排布、tensor的连续/非连续性，CUDA/Triton kernel的指针和参数校对等等问题；而训练框架相对来说更宏观一些，主要是设计的对齐、通信和死锁、不同feature的兼容等等层面。从发现和定位难度来说，pico-vllm的错误明显更好发现、难定位，而femtotron当中则是难发现、好定位。这同样能够说明两个项目的明显不同的趋势，而通过实操了解他们的特征区别正是做项目的意义。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #4 混合精度训练</title><link>https://Koas-W.github.io/posts/20260429-mixedprecision/</link><pubDate>Fri, 08 May 2026 00:36:07 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260429-mixedprecision/</guid><description>&lt;p&gt;今天完成的是混合精度训练。这部分内容说简单也很简单，因为根本不需要什么高深的理论知识。但说困难也并不容易，因为要在完全没有了解过的情况下一次性区分出这些细微的区别并不是仅仅靠直觉就能够做到的事情。&lt;/p&gt;
