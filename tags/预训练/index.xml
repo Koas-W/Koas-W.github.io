@@ -155,7 +155,7 @@ Loss 对比
  13 6.931348 6.931349 0.00000083
 
  Max diff: 0.00000274
-&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;这个数量级还是很可以接受的，但继续增加就比较难说，需要测试一下。&lt;/p&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;大约10^-6次方量级。这个数量级还是很可以接受的，但继续增加就比较难说，需要测试一下。&lt;/p&gt;
 &lt;ol start="2"&gt;
 &lt;li&gt;bf16通信 vs fp32通信&lt;/li&gt;
 &lt;/ol&gt;

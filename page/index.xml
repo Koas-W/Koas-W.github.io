@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Pages on Fain的Blog</title><link>https://Koas-W.github.io/page/</link><description>Recent content in Pages on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><atom:link href="https://Koas-W.github.io/page/index.xml" rel="self" type="application/rss+xml"/><item><title>关于</title><link>https://Koas-W.github.io/page/about/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://Koas-W.github.io/page/about/</guid><description>&lt;p&gt;我是Fain（Koas-W），目前在清华大学计算动力学实验室读博士，方向是高性能计算/计算物理/计算力学。&lt;/p&gt;
+&lt;p&gt;这个博客主要记录两类内容：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;开发日志&lt;/strong&gt;：当前在写 &lt;a class="link" href="https://github.com/Koas-W/Femtotron" target="_blank" rel="noopener"
+ &gt;Femtotron&lt;/a&gt;（极简预训练框架）和 &lt;a class="link" href="https://github.com/Koas-W/Pico-vLLM" target="_blank" rel="noopener"
+ &gt;Pico-vLLM&lt;/a&gt;（极简推理引擎），目的是把 LLM 训练 / 推理栈的关键组件亲手实现一遍。&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;学习日志&lt;/strong&gt;：读论文、读 Megatron / vLLM / veRL 等开源代码的整理。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;我的联系方式：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;GitHub: &lt;a class="link" href="https://github.com/Koas-W" target="_blank" rel="noopener"
+ &gt;Koas-W&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;Email: &lt;a class="link" href="mailto:your@email.com" &gt;your@email.com&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;</description></item></channel></rss>
