@@ -115,20 +115,47 @@ trainer 进入下一个 step
 &lt;ol start="4"&gt;
 &lt;li&gt;drop vs pad的策略选择问题&lt;/li&gt;
 &lt;/ol&gt;
-&lt;p&gt;数据集大小不能整除dp_size时需要进行特别处理。具体来说有两个策略：第一是drop策略，就是把多余的数据丢掉直到整除；第二是pad策略，就是用开头的数据把缺少的部分重复补齐直到整除。预训练一般采用前者，主要原因是数据足够多，。SFT的小数据集一般使用pad策略。&lt;/p&gt;
+&lt;p&gt;数据集大小不能整除dp_size时需要进行特别处理。具体来说有两个策略：第一是drop策略，就是把多余的数据丢掉直到整除；第二是pad策略，就是用开头的数据把缺少的部分重复补齐直到整除。预训练一般采用前者，主要原因是数据足够多，一般来说甚至跑不满一个epoch（也不建议多epoch，为了避免形成记忆）。SFT的小数据集则一般使用pad策略。&lt;/p&gt;
 &lt;ol start="5"&gt;
 &lt;li&gt;load_state_dict的配置一致性检查&lt;/li&gt;
 &lt;/ol&gt;
 &lt;p&gt;dp_size 变了（比如从 4 卡恢复到 8 卡），_start_offset 在新分片方式下没有意义，需要通过assert或者其他的方式进行一下配置的检查。在工业界里，通常不会直接用这种方式，而是做兼容性处理，即resharding：改变参数的分配方式让加载可以在不同并行度的集群上实现。resharding在工业级当中是一个相当有必要而且繁重的课题，bytedance为此发过论文，感兴趣的读者可以参考ByteCheckpoint的论文&lt;a class="link" href="https://arxiv.org/abs/2407.20143" target="_blank" rel="noopener"
  &gt;ByteCheckpoint&lt;/a&gt;以及其他相关工作（仓库：&lt;a class="link" href="https://github.com/ByteDance-Seed/ByteCheckpoint" target="_blank" rel="noopener"
- &gt;ByteCheckpoint&lt;/a&gt;），思想相当有意思，不过边界情况也相当麻烦。不过，在我们的项目当中暂时不处理它。&lt;/p&gt;
+ &gt;ByteCheckpoint&lt;/a&gt;），思想相当有意思，不过边界情况也相当麻烦。在我们的项目当中暂时不处理它，毕竟规模远远超出了单人或者少数人能够处理的范围。&lt;/p&gt;
 &lt;h3 id="collator"&gt;Collator
 &lt;/h3&gt;&lt;p&gt;这里遇到了一个相当难排查的静默bug：千万不要给Collator设置默认值，否则会造成问题。原因是测试脚本里为了代码环境的简洁性，没有传入Collator，全部按照默认值处理了默认传入参数。对于DistributedSampler等组件来说这没有什么问题。但在进行测试的时候，结果不对，排查错误信息发现是因为Collator被赋值了一个占位符默认值。虽然查出来这个问题很容易，但结果是测试脚本最后还是得重写，白费功夫。从设计哲学的角度来说，这主要是因为Collator并&lt;strong&gt;不应该&lt;/strong&gt;有一个标准的默认值：如果有，应该是什么语义，做什么？对于不同问题来说它是完全不同的，并不存在一个可以安全fallback的选项。因此，直接把它作为不可默认为空的必选参数是更合适的做法。&lt;/p&gt;
 &lt;h2 id="gradientsynchronizer"&gt;GradientSynchronizer
 &lt;/h2&gt;&lt;ol&gt;
 &lt;li&gt;grad_accum_steps次数的设置&lt;/li&gt;
 &lt;/ol&gt;
-&lt;p&gt;需要注意的是，技术上grad_accum_steps其实并不能设置的太大。一来它会影响收敛速度，二来，基于grad_accum_steps的累加是在bf16上进行的，而不是最终finalize之后的fp32。这意味着如果它累积了太多步数，很快就会出现和之前混合精度训练的博客日志里提到过的，bf16精度训练相同的问题：大数吃小数，梯度累加不正确，误差累积导致模型训练质量下降。因此，grad_accum_steps应该最好不要超过16，或者8。&lt;/p&gt;
+&lt;p&gt;需要注意的是，技术上grad_accum_steps其实并不能设置的太大。一来它会影响收敛速度，二来，基于grad_accum_steps的累加是在bf16上进行的，而不是最终finalize之后的fp32。这意味着如果它累积了太多步数，很快就会出现和之前混合精度训练的博客日志里提到过的，bf16精度训练相同的问题：大数吃小数，梯度累加不正确，误差累积导致模型训练质量下降。因此，grad_accum_steps应该最好不要特别大。在grad_accum_steps=4的情况下，测试得到的精度误差大概如下：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;============================================================
+Loss 对比
+============================================================
+
+ mbs=8, accum=1 vs mbs=4, accum=2:
+ Step Baseline Other Diff
+ ──────────────────────────────────────────────
+ 1 6.932020 6.932019 0.00000024
+ 4 6.931188 6.931187 0.00000072
+ 7 6.931248 6.931248 0.00000048
+ 10 6.930811 6.930812 0.00000143
+ 13 6.931348 6.931348 0.00000024
+
+ Max diff: 0.00000167
+ ✓ 一致性 (threshold=0.02)
+
+ mbs=8, accum=1 vs mbs=2, accum=4:
+ Step Baseline Other Diff
+ ──────────────────────────────────────────────
+ 1 6.932020 6.932020 0.00000024
+ 4 6.931188 6.931188 0.00000012
+ 7 6.931248 6.931249 0.00000095
+ 10 6.930811 6.930811 0.00000012
+ 13 6.931348 6.931349 0.00000083
+
+ Max diff: 0.00000274
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;这个数量级还是很可以接受的，但继续增加就比较难说，需要测试一下。&lt;/p&gt;
 &lt;h2 id="其他的注意事项"&gt;其他的注意事项
 &lt;/h2&gt;&lt;p&gt;这部分的开发相对顺利，没有遇到特别难以排查的bug。不过，排查过程中的死锁问题已经初见端倪。在测试功能性的过程中，“调用的时候只调用了rank0的通信导致死锁”，或者反过来“generator的参数设置错误导致其他rank调用了不该调用的通信导致死锁”的问题比比皆是。这些问题目前比较好解决，但随着框架复杂度升高，如何确保一致性、尽可能少的避免此类错误真的出现，是一件需要小小设计的事情。&lt;/p&gt;
 &lt;p&gt;另一方面来说，可以看到预训练框架的查错和pico-vllm这种推理框架的主要错误类型有显著的不同：推理框架要微观的多，涉及到底层数据排布、tensor的连续/非连续性，CUDA/Triton kernel的指针和参数校对等等问题；而训练框架相对来说更宏观一些，主要是设计的对齐、通信和死锁、不同feature的兼容等等层面。从发现和定位难度来说，pico-vllm的错误明显更好发现、难定位，而femtotron当中则是难发现、好定位。这同样能够说明两个项目的明显不同的趋势，而通过实操了解他们的特征区别正是做项目的意义。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #4 混合精度训练</title><link>https://Koas-W.github.io/posts/20260429-mixedprecision/</link><pubDate>Fri, 08 May 2026 00:36:07 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260429-mixedprecision/</guid><description>&lt;p&gt;今天完成的是混合精度训练。这部分内容说简单也很简单，因为根本不需要什么高深的理论知识。但说困难也并不容易，因为要在完全没有了解过的情况下一次性区分出这些细微的区别并不是仅仅靠直觉就能够做到的事情。&lt;/p&gt;
