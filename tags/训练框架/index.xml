@@ -1,4 +1,133 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>训练框架 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E8%AE%AD%E7%BB%83%E6%A1%86%E6%9E%B6/</link><description>Recent content in 训练框架 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Mon, 11 May 2026 16:33:30 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E8%AE%AD%E7%BB%83%E6%A1%86%E6%9E%B6/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #6 ZeRO-1和ZeRO-2模式：抽象设计、工程实现和占位符</title><link>https://Koas-W.github.io/posts/20260511-zero1/</link><pubDate>Mon, 11 May 2026 16:33:30 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260511-zero1/</guid><description>&lt;p&gt;这次的工作量主要在于实现了ZeRO-1和ZeRO-2。老实说，这部分确实下了很多功夫：因为ZeRO是一个需要分段实现，但是抽象概念上有许多共通之处的，相当大的核心feature组件。如果仅仅是硬编码进去，后续的开发就会不断的制造屎山，侵入性的修改相同地方的代码，导致不可维护性（Pico-vLLM的PD分离的时候我就是这么干的.jpg）。在查询了资料（而且在使用ai反复进行框架验证）之后，最终采取了一个完整的插入性组件系统的设计。它的核心思想是“接管”，即利用预制的系统内接口的预留、默认的No-Op占位符的设计、功能性组件和工厂类四者的协调，实现可扩展的整个ZeRO系统。下面讲讲我认为有价值的细节。&lt;/p&gt;
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>训练框架 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E8%AE%AD%E7%BB%83%E6%A1%86%E6%9E%B6/</link><description>Recent content in 训练框架 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Thu, 14 May 2026 22:58:58 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E8%AE%AD%E7%BB%83%E6%A1%86%E6%9E%B6/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #8 选择性激活检查点 Selective Activation Checkpointing</title><link>https://Koas-W.github.io/posts/20260514sac/</link><pubDate>Thu, 14 May 2026 22:58:58 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260514sac/</guid><description>&lt;p&gt;今天的工作量实现的是选择性激活检查点（SAC，Selective Activation Checkpointing）。这个组件相当简单，因为Pytorch已经。因此这篇日志会相对来说较短，主要着重于介绍它的概念、机制，以及实现过程中遇到的值得记录的bug，以供读者或者其他的后来人参考，避免踩同样的坑。&lt;/p&gt;
+&lt;h2 id="sac是什么"&gt;SAC是什么
+&lt;/h2&gt;&lt;h2 id="pytorch提供的现有机制"&gt;Pytorch提供的现有机制
+&lt;/h2&gt;&lt;h2 id="值得注意的bug"&gt;值得注意的Bug
+&lt;/h2&gt;</description></item><item><title>Femtotron开发日志 #7 ZeRO-3模式：抽象设计、Bug排查和教训总结</title><link>https://Koas-W.github.io/posts/20260513zero3/</link><pubDate>Wed, 13 May 2026 23:41:44 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260513zero3/</guid><description>&lt;p&gt;今天的工作量实现的是我个人认为到目前以来最难的一个组件：ZeRO-3。在整个开发的过程中，不仅需要修改的代码量很大、不可避免的产生了许多侵入式的修改，而且即使设计已经相当小心，还是产生了许多复杂的bug。我们首先回顾一下不同ZeRO等级的切分情况，来为下面的总结做铺垫。&lt;/p&gt;
+&lt;table&gt;
+ &lt;thead&gt;
+ &lt;tr&gt;
+ &lt;th&gt;&lt;/th&gt;
+ &lt;th&gt;权重&lt;/th&gt;
+ &lt;th&gt;梯度&lt;/th&gt;
+ &lt;th&gt;优化器状态&lt;/th&gt;
+ &lt;/tr&gt;
+ &lt;/thead&gt;
+ &lt;tbody&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-1&lt;/td&gt;
+ &lt;td&gt;完整&lt;/td&gt;
+ &lt;td&gt;完整&lt;/td&gt;
+ &lt;td&gt;切分&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-2&lt;/td&gt;
+ &lt;td&gt;完整&lt;/td&gt;
+ &lt;td&gt;切分&lt;/td&gt;
+ &lt;td&gt;切分&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-3&lt;/td&gt;
+ &lt;td&gt;切分&lt;/td&gt;
+ &lt;td&gt;切分&lt;/td&gt;
+ &lt;td&gt;切分&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;可以看到，ZeRO-3的增量在于切分了权重。&lt;/p&gt;
+&lt;h2 id="zero-3的分片和tp的区别是什么"&gt;ZeRO-3的分片和TP的区别是什么
+&lt;/h2&gt;&lt;p&gt;这是我的第一反应，可能也是很多人第一次学到ZeRO-3的时候会觉得，“这不就是DP版本的TP吗？”，都是权重切分、都需要相当heavy的通信。然后，如果有人做过推理框架或者训练框架的TP并行的话，就会知道，TP并行是很简单的。因此，一个很自然的想法是：ZeRO-3是不是也会很简单？并非如此。实际上，两者除了都具有这两个特征之外也就没有什么区别了。和TP截然相反，ZeRO-3的实现复杂度是非常高的。让我们来分析一下。&lt;/p&gt;
+&lt;h3 id="通信的对象是问题"&gt;通信的对象是问题
+&lt;/h3&gt;&lt;p&gt;这是最大的区别。对于TP并行来说，通信的永远是&lt;strong&gt;数据本身&lt;/strong&gt;。无论何时，权重都是分片的、静态的，在通信前后改变的是数据。进一步的说，通信改变的是数据的内容（值），而不是形状，涉及到的通信操作是All-Reduce，而不是All-gather等等。从头到尾，占据的内存峰值不会有任何变化，因为张量的形状不会有任何变化。这是TP并行。&lt;/p&gt;
+&lt;p&gt;但对于依赖于DP的ZeRO-3来说，情况就完全不一样了。它通信的对象是&lt;strong&gt;权重参数&lt;/strong&gt;。在前向/反向过程中，数据不动，动的是参数本身。这就意味着参数的大小和形状都是频繁变化的，而大多数时候一个DP rank的概念视图和实际持有的参数并不一样。这在概念上并不阻碍原理的理解，但引入了很大的工程复杂性。&lt;/p&gt;
+&lt;h2 id="zero-3麻烦的地方"&gt;ZeRO-3麻烦的地方
+&lt;/h2&gt;&lt;h3 id="zero-3真实的工程实现模式"&gt;ZeRO-3真实的工程实现模式
+&lt;/h3&gt;&lt;p&gt;ZeRO-3的工程实现并不如它的论文和概念上那么优美。论文上的实现是这么描绘的：将“每个参数的权重进行分片，均匀的保存在各个不同的DP rank上”，然后“在前向传播和反向传播需要这个参数的时候，进行相应参数的unshard，用完后立刻reshard，避免内存峰值”。这在概念上是非常简洁优美的，但实现上立刻会遇到问题：每个参数单独来看是不够大的，但每次通信启动都需要固定的launch overhead。为此，要么直接不对小的tensor进行分片（这会引入相当的复杂度），要么就得把若干个参数打包在一起，在更大的粒度上进行reshard/unshard（这同样会引入另一种复杂度）。在具体工程实现上，一般按照block（layer）为粒度打包。一个layer的参数被flat然后concat在一起，然后集体通信来分片和聚集。这意味着整个正常的基于参数tensor的梯度更新模式都不再适用了，需要重新设计。&lt;/p&gt;
+&lt;p&gt;当然，这就意味着工程上的实现复杂度会相当高，不过在此不再赘述了。&lt;/p&gt;
+&lt;h3 id="zero-3单独实现产生的收益"&gt;ZeRO-3单独实现产生的收益
+&lt;/h3&gt;&lt;p&gt;令人沮丧的是，即使工程实现很麻烦，它的收益并不大。这是因为整个训练过程的内存占用变化其实是一个“双峰”的过程，而内存峰值这个单一最大值才是最终决定端到端收益的关键。具体来说，第一个潜在的峰值是在前向传播结束之后，反向传播开始之前，它的主要动态内存占用的来源是激活值；第二个潜在峰值则是反向传播结束之后，优化开始之前，其主要动态内存占用的来源是梯度。在这两者之间，随着反向逐层进行，激活值逐层被释放，而梯度则随着backward逐层被产生。也就是说，在这两个潜在峰值之间的内存占用基本上是线性插值的关系，而两个端点谁更高，谁就主导了全生命周期的内存峰值。权重、优化器状态和其他杂项则是全程存在的。这意味着梯度的总占用和激活值的总占用大小决定了哪个成为瓶颈。&lt;/p&gt;
+&lt;p&gt;ZeRO-2技术减少的是第二次峰值的规模，而不是第一次的。对于ZeRO-2之后的全周期显存占用来说，瓶颈就已经是激活值了，ZeRO-3继续叠加的边际效应并不是很大。但从另一个角度思考，ZeRO-3的内存占用减少是针对全周期的，和激活值/梯度都无关。&lt;/p&gt;
+&lt;h2 id="值得注意的bug和它们的排查"&gt;值得注意的Bug，和它们的排查
+&lt;/h2&gt;&lt;h3 id="内存泄露"&gt;内存泄露
+&lt;/h3&gt;&lt;p&gt;我一直说，“能够在自己的代码里遇到实际的内存泄露问题，并且亲手解决它”，才是成为真正的合格码农的象征。这次，在今天终于遇到了。不过，自己尝试过才知道，这个寻找的过程是相当麻烦的。&lt;/p&gt;
+&lt;p&gt;问题出现在刚实现完ZeRO-3，跑通测试用例的时候，我发现ZeRO-3相对于ZeRO-2的内存峰值不降反升，多了整整~230MB。这奇怪极了，遂开始排查原因。这个问题显然网上没什么直接结论。询问ai，ai一开始的解释是“可能nccl等等后端占据了更大的缓存”，但这并不令人信服。随后，我开始自行排查。我改变了测试脚本的测试范围，对每一个单独进行测试，发现这个内存峰值的现象消失了，ZeRO-3的内存峰值下降到低于ZeRO-2的水平。准确的说，只有在存在ZeRO-2的情况下，ZeRO-3会出问题。于是怀疑是ZeRO-2的处理不干净，出现了内存泄露。尝试使用Pytorch的释放和gc的释放，无果。在进行了exhausting的大量排查之后，终于定位到，是ZeRO-2和3使用到的hook注册机制造成的隐式循环引用，无法被gc回收，于是永久性泄露。它的具体机制如下：&lt;/p&gt;
+&lt;p&gt;ZeRO-2的源代码中：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;13
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;14
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;15
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;16
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;17
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;18
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;19
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;20
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;21
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;22
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;23
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;24
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;25
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;26
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;27
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;28
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;_register_hook&lt;/span&gt;(self, group: ParamGroup):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; spec &lt;span style="color:#f92672"&gt;=&lt;/span&gt; group&lt;span style="color:#f92672"&gt;.&lt;/span&gt;master_spec
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;hook&lt;/span&gt;(param):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;_sync_enabled:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; &lt;span style="color:#75715e"&gt;# no_sync 期间放过&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; param&lt;span style="color:#f92672"&gt;.&lt;/span&gt;grad &lt;span style="color:#f92672"&gt;is&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;assert&lt;/span&gt; spec &lt;span style="color:#f92672"&gt;is&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;, &lt;span style="color:#e6db74"&gt;&amp;#34;ZeRO-2 hook 只能注册在分片了的 param 上。&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; flat &lt;span style="color:#f92672"&gt;=&lt;/span&gt; param&lt;span style="color:#f92672"&gt;.&lt;/span&gt;grad&lt;span style="color:#f92672"&gt;.&lt;/span&gt;flatten()
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; spec&lt;span style="color:#f92672"&gt;.&lt;/span&gt;pad_size &lt;span style="color:#f92672"&gt;&amp;gt;&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; padding &lt;span style="color:#f92672"&gt;=&lt;/span&gt; torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;zeros(spec&lt;span style="color:#f92672"&gt;.&lt;/span&gt;pad_size, dtype&lt;span style="color:#f92672"&gt;=&lt;/span&gt;flat&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dtype, device&lt;span style="color:#f92672"&gt;=&lt;/span&gt;flat&lt;span style="color:#f92672"&gt;.&lt;/span&gt;device)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; flat &lt;span style="color:#f92672"&gt;=&lt;/span&gt; torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;cat([flat, padding])
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; shard &lt;span style="color:#f92672"&gt;=&lt;/span&gt; torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;empty(spec&lt;span style="color:#f92672"&gt;.&lt;/span&gt;shard_size, dtype&lt;span style="color:#f92672"&gt;=&lt;/span&gt;flat&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dtype, device&lt;span style="color:#f92672"&gt;=&lt;/span&gt;flat&lt;span style="color:#f92672"&gt;.&lt;/span&gt;device)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; dist&lt;span style="color:#f92672"&gt;.&lt;/span&gt;reduce_scatter_tensor(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; shard, flat, op&lt;span style="color:#f92672"&gt;=&lt;/span&gt;dist&lt;span style="color:#f92672"&gt;.&lt;/span&gt;ReduceOp&lt;span style="color:#f92672"&gt;.&lt;/span&gt;AVG, group&lt;span style="color:#f92672"&gt;=&lt;/span&gt;self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dp_group
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;_grad_shards[group&lt;span style="color:#f92672"&gt;.&lt;/span&gt;name] &lt;span style="color:#f92672"&gt;=&lt;/span&gt; shard
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; param&lt;span style="color:#f92672"&gt;.&lt;/span&gt;grad &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt; &lt;span style="color:#75715e"&gt;# 释放 compute.grad,这是 ZeRO-2 省显存的关键&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; handle &lt;span style="color:#f92672"&gt;=&lt;/span&gt; group&lt;span style="color:#f92672"&gt;.&lt;/span&gt;compute&lt;span style="color:#f92672"&gt;.&lt;/span&gt;register_post_accumulate_grad_hook(hook)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;_hook_handles&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(handle)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# group.compute.register_post_accumulate_grad_hook(hook)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;使用了hook。因此hook依赖strategy，而strategy又有groups_ref，groups_ref有ParamGroup，ParamGroup有model.parameter，model.parameter被hook注册了，有hook。这就循环依赖了。如图：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;model.parameter ──→ hook closure ──→ strategy
+ ↑ │
+ └──── ParamGroup ←── groups_ref ───┘
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;hook+闭包+循环引用的联合造成的Python gc盲区。&lt;code&gt;register_*_hook&lt;/code&gt;把closure存在tensor/module的C++内部结构里。Python的gc不能traverse这些C++边，因此&lt;strong&gt;循环引用永远断不开&lt;/strong&gt;。&lt;code&gt;del strategy&lt;/code&gt; 和 &lt;code&gt;gc.collect()&lt;/code&gt; 都只是把&amp;quot;显式&amp;quot;引用降 1，这条环上的hook边不动。&lt;/p&gt;
+&lt;p&gt;修复方法倒也简单，需要让每个 &lt;code&gt;register_*_hook&lt;/code&gt; 都返回 &lt;code&gt;RemovableHandle&lt;/code&gt;，strategy显式持有这些引用，在 &lt;code&gt;cleanup()&lt;/code&gt; 里全部 &lt;code&gt;.remove()&lt;/code&gt;，然后再进入正常的释放流程。这是个任何架构都救不了的问题，只能靠纪律。因为其形成循环引用的隐蔽性，一个教训是，每个注册了hook的地方都必须显式管理它们的handle的生命周期。&lt;/p&gt;
+&lt;h3 id="噪声扰动还是bug"&gt;噪声扰动还是Bug
+&lt;/h3&gt;&lt;p&gt;另一个bug来源于跑通之前。在刚刚跑通的时候，我发现这次的误差比测试dp-tp切换正确性的时候大，而且大了整整1~2个数量级。ai对此给出的解释依然同样是“这是噪声”，但我认为不应该是这个原因。于是，我增大了模型参数，重新测试了一遍，发现误差同样扩大了相同的比例。我意识到，这不可能是噪声。然后，我修改了测试的方式。我使用完全相同的随机数据进行训练，在每一步之间不进行任何更改。接着，我发现误差不再呈现随机性：loss缩小的速度比baseline高，随着每一步快速扩大。这证实了存在一个bug。&lt;/p&gt;
+&lt;p&gt;随后的排查发现，是一部分没有被打包的孤立参数（非layer的参数）没有被正确的处理，fallback到了默认路径，因此在DP下行为异常，于是静默报错。&lt;/p&gt;
+&lt;p&gt;这是我遇到的第一个静默报错。实际上，识别出它完全靠我本人的经验直觉，而不是某种定量的测试——阈值测试在这个情况下失败了。这个故事实际上能给出一个很好的启示，就是真正的对抗性的测试设计的必要性。普通的测试用例本就应该是“充满恶意的”，而不是“我给出正常工作的条件和宽松的通过判定标准，结果看上去差不多就允许放过”。进一步的说，即使有了测试用例，没有人自己的检查，通常还是会遗漏一定数量的bug，因为bug并不总是以你预期的方式显露其特征，它有时候完全不以测试者预期的方式甚至能够定量判定的方式暴露。&lt;/p&gt;
+&lt;p&gt;更进一步的说，让自己的大脑多经验类似问题，积累相关的模式识别的经验确实是很重要的。&lt;/p&gt;
+&lt;h3 id="无法实现的bit-exact"&gt;无法实现的Bit-Exact
+&lt;/h3&gt;&lt;p&gt;bug修复了之后，扰动变成了彻底的噪声，但是仍然不是0。看上去很强迫症不友好，但这其实是没有办法的。实际上，Bit-Exact对于前两者成立只是偶然，如果TP-DP配置不同，结果也会不同，同样无法Bit-Exact。但ZeRO-3为什么DP内部也不行呢？笔者个人能够想到的原因主要是通信带来的问题：前两者并没有打破“参数”的概念边界，而后者打破了，把不同的“参数”变成了纯粹的“数据”或者“比特流”，造成了通信的必然不一致。&lt;/p&gt;
+&lt;p&gt;ZeRO-1/2的分片性质，本质上是master按参数自己的边界切。Rank 0持有&amp;quot;q_proj 前一半 + k_proj 前一半 + ...&amp;quot;,Rank 1持有&amp;quot;后一半 + 后一半 + ...&amp;quot;。两个rank处理的是同一组参数(每个参数都参与)，只是各自处理这个参数的不同元素。这意味着每个参数的sq_sum、grad reduction等等操作，以及通信前后更新的操作，在rank内的累加顺序和baseline完全对称，且ZeRO-1和ZeRO-2之间，的通信拓扑和对象并没有本质的改变，因此维持了一致性。&lt;/p&gt;
+&lt;p&gt;ZeRO-3的分片性质则是整个一个block（或者说layer）变成一个cluster，整个layer的所有参数合在一起，把（这里的架构是9个）整个9个参数flatten+concat后再切。Rank 0持有的是“q_proj 全 + k_proj 全 + v_proj 全 + o_proj 前段”,Rank 1持有“o_proj 后段 + gate_proj 全 + ...”，以此类推。这意味着，两个不同的DP rank处理的是不同的参数集合。在对这个改变的对象进行通信，或者进行clip等后操作时，reduction树拓扑改了。fp32 加法不满足结合律，这就意味着最后一两位ULP必然不同。不过，这个量级的噪声并不会真的破坏模型的正常收敛，因此大可放心的使用。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #6 ZeRO-1和ZeRO-2模式：抽象设计、工程实现和占位符</title><link>https://Koas-W.github.io/posts/20260511-zero1/</link><pubDate>Mon, 11 May 2026 16:33:30 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260511-zero1/</guid><description>&lt;p&gt;这次的工作量主要在于实现了ZeRO-1和ZeRO-2。老实说，这部分确实下了很多功夫：因为ZeRO是一个需要分段实现，但是抽象概念上有许多共通之处的，相当大的核心feature组件。如果仅仅是硬编码进去，后续的开发就会不断的制造屎山，侵入性的修改相同地方的代码，导致不可维护性（Pico-vLLM的PD分离的时候我就是这么干的.jpg）。在查询了资料（而且在使用ai反复进行框架验证）之后，最终采取了一个完整的插入性组件系统的设计。它的核心思想是“接管”，即利用预制的系统内接口的预留、默认的No-Op占位符的设计、功能性组件和工厂类四者的协调，实现可扩展的整个ZeRO系统。下面讲讲我认为有价值的细节。&lt;/p&gt;
 &lt;h2 id="zero-1的细节"&gt;ZeRO-1的细节
 &lt;/h2&gt;&lt;h3 id="即使在python也要坚持类型安全"&gt;即使在Python也要坚持类型安全
 &lt;/h3&gt;&lt;p&gt;虽然没什么特别高深的理论，但在这里真的特别值得强调一下。虽然Python是一个弱类型语言，但在一个框架当中，坚持类型安全的写法是&lt;strong&gt;极其、极其、极其&lt;/strong&gt;重要的！它可不只是你面前的红色波浪线是多还是少的问题，真的不要低估它带来的作用。第一，它可以识别极多的低级错误，作为最基础的提示工具，帮助开发者回忆和建立正确的上下文，其功能性不亚于自动补全工具。第二，即使没有错误，它也可以极大的降低心智负担，从而允许我们以更低的心智劳动成本建立对框架的整体认知、回忆（或者了解）先前开发者的设计意图，避免破坏现有的设计模式。在Pico-vLLM当中，由于急着开发，很多地方并没有这么做、凭借记忆和直觉写代码，从而导致后面再次要修改代码的时候，经常出现无意间破坏了先前设计的核心不变量和默契的情况，从而极大的增加了维护工作量。切记：如果能不加入none，坚决不要加入；不管有没有如果，每个关键参数的签名都要完整写出。defensive有时候是好的，有时候是让代码变得不可维护。&lt;/p&gt;
