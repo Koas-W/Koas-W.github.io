@@ -1,8 +1,194 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Fain的Blog</title><link>https://Koas-W.github.io/</link><description>Recent content on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Thu, 14 May 2026 22:58:58 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #8 选择性激活检查点 Selective Activation Checkpointing</title><link>https://Koas-W.github.io/posts/20260514sac/</link><pubDate>Thu, 14 May 2026 22:58:58 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260514sac/</guid><description>&lt;p&gt;今天的工作量实现的是选择性激活检查点（SAC，Selective Activation Checkpointing）。这个组件相当简单，因为Pytorch已经。因此这篇日志会相对来说较短，主要着重于介绍它的概念、机制，以及实现过程中遇到的值得记录的bug，以供读者或者其他的后来人参考，避免踩同样的坑。&lt;/p&gt;
-&lt;h2 id="sac是什么"&gt;SAC是什么
-&lt;/h2&gt;&lt;h2 id="pytorch提供的现有机制"&gt;Pytorch提供的现有机制
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Fain的Blog</title><link>https://Koas-W.github.io/</link><description>Recent content on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Sun, 17 May 2026 23:26:30 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #9 流水线并行 Pipeline Parallelism</title><link>https://Koas-W.github.io/posts/20260517pipelineparallel/</link><pubDate>Sun, 17 May 2026 23:26:30 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260517pipelineparallel/</guid><description>&lt;p&gt;这几天的工作量是实现了3P并行当中的最后一环：流水线并行，Pipeline Parallelism。这个并行理论上在Pico-vLLM的推理场景当中也同样有意义，但却碍于工程量问题未能真实实现，因此在Femtotron中对它进行真正的实现也算是弥补了遗憾。这次的博客更新之所以隔了这么多天，是因为这个并行的工程量意外的大，而且和之前的ZeRO系列一样，具有极多麻烦的边界情况问题。下面讲一讲原理、核心的设计抽象，以及中途遇到的值得一提的问题，以供后来人和读者参考，希望有所帮助。&lt;/p&gt;
+&lt;h2 id="流水线并行的原理"&gt;流水线并行的原理
+&lt;/h2&gt;&lt;p&gt;应该没有人不能理解PP的原理是什么。它在概念上极其简单：在tokenizer-若干个layer-lm head这个前向传播的维度上，按某种原则进行切分，将切分的结果。&lt;/p&gt;
+&lt;p&gt;问题是它的实现同样很麻烦。下面会详细讲讲这些问题。&lt;/p&gt;
+&lt;h2 id="流水线并行的核心设计架构和抽象"&gt;流水线并行的核心设计架构和抽象
 &lt;/h2&gt;&lt;h2 id="值得注意的bug"&gt;值得注意的Bug
-&lt;/h2&gt;</description></item><item><title>Femtotron开发日志 #7 ZeRO-3模式：抽象设计、Bug排查和教训总结</title><link>https://Koas-W.github.io/posts/20260513zero3/</link><pubDate>Wed, 13 May 2026 23:41:44 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260513zero3/</guid><description>&lt;p&gt;今天的工作量实现的是我个人认为到目前以来最难的一个组件：ZeRO-3。在整个开发的过程中，不仅需要修改的代码量很大、不可避免的产生了许多侵入式的修改，而且即使设计已经相当小心，还是产生了许多复杂的bug。我们首先回顾一下不同ZeRO等级的切分情况，来为下面的总结做铺垫。&lt;/p&gt;
+&lt;/h2&gt;&lt;h2 id="zero-3--pp时会发生的死亡显存占用和计算效率问题"&gt;ZeRO-3 + PP时会发生的死亡显存占用和计算效率问题
+&lt;/h2&gt;&lt;p&gt;虽然这听上去很奇怪，但这是真的。ZeRO-3 + PP加在一起不如两个都不加。在我的测试当中，ZeRO-3在很多情况下，不仅没有相对于ZeRO-2降低显存的占用，反而增加了其占用情况。在PP=1的情况下，这种情况尚且并不多见；在PP=2及以上，即采用PP并行的情况下，它几乎&lt;strong&gt;总是&lt;/strong&gt;比ZeRO-2还要差。是SAC也拯救不了的那种，纯粹的占用了更多无法被释放的显存。&lt;/p&gt;
+&lt;p&gt;经过分析和多个配置参数的验证，这确实不是一个正确性问题，而是无法避免的机制冲突。也就是说：ZeRO-3 + PP是&lt;strong&gt;根本上不兼容&lt;/strong&gt;的两个训练优化/并行化机制。个人认为这是一个挺反直觉（至少不能第一时间通过纸面理论察觉到）的结果，而且某种程度上令人感到沮丧：因为ZeRO-3本身的复杂度就奇高无比，而且我自己实现的时候也花了很多心血，但现在却发现它作为增量的收益远不如我们预期的多。不过无论如何，抛开这些投入成本不谈，我仍然查询了学界和工业界对此的理解和处理，并且确实得到了很多有意思的信息和结论、方案。下面讲讲我了解到的相关原理、机制解释，以及学术界、工业界对它们的处理方法。&lt;/p&gt;
+&lt;h3 id="autograd-held-view现象"&gt;autograd-held view现象
+&lt;/h3&gt;&lt;h3 id="通信组communication-group划分导致显存反噬"&gt;通信组（Communication Group）划分导致显存反噬
+&lt;/h3&gt;&lt;p&gt;在引入PP后，每一台机器（或每一张卡）只负责模型的一部分层。如果再引入ZeRO-3，那么理想状态下，单卡只存8层参数的$1/N$。但是，在实际上的训练现实当中，因为PP在前向传播时，每张卡都在高速、连续地处理不同的 Micro-batch（微批次）。为了不让流水线产生停顿和空泡，ZeRO-3必须为&lt;strong&gt;所有正在流水线中流动的Micro-batch&lt;/strong&gt;预留足够的缓存空间，更激进来说甚至要提前拉取（Prefetch）并缓存完整的参数。这导致我们必须重新占用这些好不容易省下来的显存。为了应付多阶段流水线并发，被ZeRO-3的 &lt;strong&gt;&lt;code&gt;All-Gather&lt;/code&gt; 缓冲区、预取缓冲区（Prefetch Buffer）以及临时激活值&lt;/strong&gt;很可能（实际上是几乎一定）最终被撑得比单纯用PP还要大！&lt;/p&gt;
+&lt;p&gt;这是一个从数学理论上无解的问题。因为如果不开这个缓冲区，那么通信就要序列化。如果通信序列化，那么流水线就会有空泡。如果流水线有空泡，那么整个训练的MFU就会下降。众所周知，MFU是一个比显存占用还要关键的指标，等同于公司每分每秒的真金白银。因此，二者不可兼得，只能不放在一起做了。&lt;/p&gt;
+&lt;h3 id="工业界的解决方案"&gt;工业界的解决方案
+&lt;/h3&gt;&lt;p&gt;目前业界主流的训练架构（Meta、微软、英伟达、阿里...等等）在工程上的演化结果基本上没有同时采用两者的方案，而是以其中一种为主导发展出了两条完全平行的技术路线：&lt;/p&gt;
+&lt;h5 id="路线一nvidia--megatron-派系-纯粹的-3d-并行--zero-12"&gt;路线一（NVIDIA / Megatron 派系）： 纯粹的 3D 并行 + ZeRO-1/2
+&lt;/h5&gt;&lt;ul&gt;
+&lt;li&gt;**架构：**Tensor Parallel (TP) + Pipeline Parallel (PP) + Distributed Optimizer (ZeRO-2)。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;这一路线的核心逻辑是，只要用了 PP，就绝对&lt;strong&gt;不用任何参数分片（即不用 ZeRO-3）&lt;/strong&gt;。参数的纵向拆分靠PP，横向拆分靠机器内的TP（NVLink的高速通信）。数据并行组只用ZeRO-2来切分优化器状态。这种组合基本上可以被认为是目前最稳定、大厂千卡乃至万卡的大规模严肃预训练场景中，MFU（算力利用率）最高的方案。&lt;/p&gt;
+&lt;h5 id="路线二pytorch-原生--hugging-face-派系-fsdp-代替-zero-3--取代-pp"&gt;路线二（PyTorch 原生 / Hugging Face 派系）： FSDP 代替 ZeRO-3 + 取代 PP
+&lt;/h5&gt;&lt;ul&gt;
+&lt;li&gt;**架构：**Fully Sharded Data Parallel (FSDP)。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;这一路线的核心逻辑是，既然ZeRO-3思想（参数全分片）单卡和多卡能省显存，那就&lt;strong&gt;彻底抛弃PP（流水线并行）&lt;/strong&gt;。现代团队发现，用FSDP配合 &lt;code&gt;Activation Checkpointing&lt;/code&gt;，在8卡或16卡环境里，可以轻松塞下70B甚至更大的模型进行全量微调，完全不需要开PP。因为 PP 带来了烦人的流水线气泡（Bubble）和通信等待，而纯FSDP的通信是可以和前向计算完美重叠（Overlap）的。这种组合更多被中型到小型的大模型训练团队采用为高度方便的训练方案。&lt;/p&gt;
+&lt;h2 id="逸闻"&gt;逸闻
+&lt;/h2&gt;&lt;p&gt;这就是查询参考方案性能的时候查到的一件事情，前面也多多少少提了一句。其实，在Deepspeed的方案中，ZeRO-2和ZeRO-3与Pipeline Parallelism的实现是不兼容的！这是我好不容易把正确性调对、绞尽脑汁也没法解决ZeRO-3性能问题之后，迫于无奈尝试参考官方实现的时候震惊地得知的结果。&lt;/p&gt;
+&lt;p&gt;不过，实测下来，ZeRO-2+PP仍然是相对来说有实际意义的，测试的数据也支持这一个结论。换言之，我们的方案已经在feature上超过了Deepspeed（哈）。当然，这很大程度上是因为我们的框架本质上是一个个人项目框架，而不是需要处理所有边界情况的工业级项目；但即使如此，这也意味着我们的开发过程并不是毫无作用的。探索这些可行和不可行的边界，正是好的coding项目应该做的事情。如果读者对这部分感兴趣，源代码已经开源在仓库里，有兴趣的读者可以去阅读。&lt;/p&gt;
+&lt;h2 id="总结"&gt;总结
+&lt;/h2&gt;&lt;p&gt;到这一步为止，我们已经完成了除了SFT训练支持之外的所有核心feature组件的实现。接下来是SFT，它的复杂度应该会比我们已经走过的路程低很多。后面的很多调度方案等等组件，也是在现有框架架构的基础上进行扩展，而不是进行颠覆式的重构和侵入式修改。无论如何，这已经是一个令人兴奋和欣慰的进展，而且Femtotron作为一个预训练框架已经来到了。集中开发的工作仍然在继续，可能会有一篇阶段式里程碑的博客，总结我们已经具有的feature情况。可能还有一篇专门用来做Profiling，为未来可能的参数调优做准备。whatever，道阻且长，慢慢做吧。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #8 选择性激活检查点 Selective Activation Checkpointing</title><link>https://Koas-W.github.io/posts/20260514sac/</link><pubDate>Fri, 15 May 2026 22:58:58 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260514sac/</guid><description>&lt;p&gt;今天的工作量实现的是选择性激活检查点（SAC，Selective Activation Checkpointing）。这个组件相当简单，因为Pytorch已经。因此这篇日志会相对来说较短，主要着重于介绍它的概念、机制，以及实现过程中遇到的值得记录的bug，以供读者或者其他的后来人参考，避免踩同样的坑。&lt;/p&gt;
+&lt;h2 id="sac是什么"&gt;SAC是什么
+&lt;/h2&gt;&lt;p&gt;SAC是一种降低训练中内存占用峰值的技术，代价是增加反向传播当中的计算量。它的具体原理是，每隔一段“距离”，保存一个可以进行前向传播的中间激活值，抛弃这个距离中的两个端点之间的所有其他值。当反向传播开始/越过一个检查点的末尾的时候，我们如果遇到的接下来的反向传播路径当中没有现成的中间激活值，就从最近的一个检查点重新向前计算，重新铺好这段反向传播需要的中间激活值路径。&lt;/p&gt;
+&lt;h3 id="sac的理论最优情形"&gt;SAC的理论最优情形
+&lt;/h3&gt;&lt;p&gt;假设我们的模型参数由连续均值的$L$层构成，而检查点每隔$N$层设置一个。此时，可以直接计算出，显存的峰值占用分为两个部分：一个是$1/N$个的检查点层，一个是$N$个的正在进行反向传播的段落，两者加起来就是$N+1/N$。这个式子的最小值点大家应该都熟悉，初中数学嘛。因此，如果想要显存占用最小化的话，理论上来说，$N=\sqrt L$是能够让显存峰值占用最小的点。&lt;/p&gt;
+&lt;h3 id="sac的主流实践"&gt;SAC的主流实践
+&lt;/h3&gt;&lt;p&gt;当然，工程上通常并不会这么做，因为这个理论模型和现实差的很远，而且并不一定符合我们的MFU最大化的目标——SAC过于稀疏将会导致密集的重计算（recomputation），从而带来额外的计算负担，拖慢训练。SAC的主流实践一般以层为最大粒度：每层保留结构位置相同的Checkpoint，具体保留哪些则由具体策略决定。&lt;/p&gt;
+&lt;h2 id="pytorch提供的现有机制"&gt;Pytorch提供的现有机制
+&lt;/h2&gt;&lt;p&gt;SAC的实现意外的很简单，因为它在实现上基本就是直接复用Pytorch现有的基础设施组件。具体而言，它使用类似以下的代码进行SAC的设置和激活：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;13
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;14
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;15
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;16
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;17
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;18
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;19
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;20
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;21
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;22
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;23
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;24
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;25
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;26
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;27
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;28
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;29
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;30
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;31
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;32
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;33
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;34
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;35
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;36
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;37
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;38
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;39
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;40
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;41
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;42
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;43
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;class&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;ActivationCheckpointWrapper&lt;/span&gt;(nn&lt;span style="color:#f92672"&gt;.&lt;/span&gt;Module):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;&amp;#34;&amp;#34;将一个 module 包装为 activation checkpoint。
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; Forward 调用通过 checkpoint function 转发,中间 activation 不保留;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; backward 时,该 unit 的 forward 会被重做一次以重建 saved tensors。
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; Attributes:
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; inner_module: 被包装的原始 module
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; checkpoint_fn: 实际的 checkpoint 实现
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; use_reentrant: 传递给 checkpoint_fn 的 flag
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; preserve_rng_state: 传递给 checkpoint_fn 的 flag
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; &amp;#34;&amp;#34;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;__init__&lt;/span&gt;(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; module: nn&lt;span style="color:#f92672"&gt;.&lt;/span&gt;Module,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;*&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; checkpoint_fn: CheckpointFn &lt;span style="color:#f92672"&gt;=&lt;/span&gt; _torch_checkpoint,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; use_reentrant: bool &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;False&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; preserve_rng_state: bool &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;False&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; debug: bool &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;False&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; ) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; super()&lt;span style="color:#f92672"&gt;.&lt;/span&gt;&lt;span style="color:#a6e22e"&gt;__init__&lt;/span&gt;()
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; setattr(self, _WRAPPED_MODULE_KEY, module)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;checkpoint_fn &lt;span style="color:#f92672"&gt;=&lt;/span&gt; checkpoint_fn
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;use_reentrant &lt;span style="color:#f92672"&gt;=&lt;/span&gt; use_reentrant
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;preserve_rng_state &lt;span style="color:#f92672"&gt;=&lt;/span&gt; preserve_rng_state
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;debug &lt;span style="color:#f92672"&gt;=&lt;/span&gt; debug
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;_register_state_dict_hook(_post_state_dict_hook)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;_register_load_state_dict_pre_hook(_pre_load_state_dict_hook)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;forward&lt;/span&gt;(self, &lt;span style="color:#f92672"&gt;*&lt;/span&gt;args: Any, &lt;span style="color:#f92672"&gt;**&lt;/span&gt;kwargs: Any) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; Any:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;checkpoint_fn(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;inner_module,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;*&lt;/span&gt;args,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; use_reentrant&lt;span style="color:#f92672"&gt;=&lt;/span&gt;self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;use_reentrant,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; preserve_rng_state&lt;span style="color:#f92672"&gt;=&lt;/span&gt;self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;preserve_rng_state,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; debug&lt;span style="color:#f92672"&gt;=&lt;/span&gt;self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;debug,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;**&lt;/span&gt;kwargs,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;就是这么简单，核心代码其实就是利用&lt;code&gt;_torch_checkpoint&lt;/code&gt;进行一次前向传播时候的调用包装。当然，用户也可以自定义这个warpper，但大多数时候利用基础设施当中的现有组件就已经完全够用了。&lt;/p&gt;
+&lt;h2 id="值得注意的bug和问题"&gt;值得注意的Bug和问题
+&lt;/h2&gt;&lt;h3 id="sac的bug"&gt;SAC的bug
+&lt;/h3&gt;&lt;p&gt;在这个过程中，遇到了一个特别棘手的问题：Pytorch反复报错。当第一次前向传播的时候很正常，接下来反向传播回去的时候却报错，而报错信息显示多了两个不知道是什么的tensor，整个ckpt的tensor数量从38个变成了40个，对不上。这个bug的排查过程非常艰难，几乎花了我3~4个小时的时间，才定位和理解了问题发生的具体原理。&lt;/p&gt;
+&lt;p&gt;在排查之后发现，发现这其实不是我们本身的代码实现错误，而是Pytorch后端调用的自动切换导致的。实际上，这就是HuggingFace著名的 &lt;code&gt;use_cache&lt;/code&gt; + gradient checkpointing 互斥问题。&lt;/p&gt;
+&lt;p&gt;它的具体的引起原因来源于LlamaModel的默认设置，config.use_cache=True，也即自动保存和管理KV cache，以加速前向传播。第一次forward时，cache为空，因此调用了 &lt;code&gt;_scaled_dot_product_flash_attention&lt;/code&gt;(因为它满足FlashAttention的shape要求)。 recompute时，cache已经被填充，因此K/V的seq长度翻倍，不再是空tensor，因此数量就对不上，同时不满足FlashAttention的causal mask约束，dispatcher fallback到math backend，因此具体的后端实现也发生了变化。这两个因素加起来，导致报错。&lt;/p&gt;
+&lt;p&gt;它其实有一个内置防御，类似这样的形式：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;8
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#75715e"&gt;# transformers/models/llama/modeling_llama.py&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;gradient_checkpointing &lt;span style="color:#f92672"&gt;and&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;training:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; use_cache:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; logger&lt;span style="color:#f92672"&gt;.&lt;/span&gt;warning_once(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;`use_cache=True` is incompatible with gradient checkpointing. &amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;Setting `use_cache=False`...&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; use_cache &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;False&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;但只有调用 &lt;code&gt;model.gradient_checkpointing_enable()&lt;/code&gt; 或者把 &lt;code&gt;model.gradient_checkpointing = True&lt;/code&gt; 设上时这条防御才生效。它的判据是 &lt;code&gt;self.gradient_checkpointing&lt;/code&gt; 这个flag，而不是探测调用栈里有没有checkpoint，因此失效。这确实是一个值得记录下来的教训，在部分采用现有基础设施来构建框架的时候，一定要注意这种细节问题。&lt;/p&gt;
+&lt;h3 id="sac能带来多少收益"&gt;SAC能带来多少收益
+&lt;/h3&gt;&lt;p&gt;来看图：&lt;/p&gt;
+&lt;p&gt;[一张seq_len=32的占位符]&lt;/p&gt;
+&lt;p&gt;[一张seq_len=1024的占位符]&lt;/p&gt;
+&lt;p&gt;亲爱的读者们，如果你们无论怎么测试，得到的都是类似前者的结果，你们会不会质疑，自己的代码实现有问题呢？至少我是会的：因为内存占用是bit-exact的完全没有变化，看上去更像是SAC根本没有正确加载和起效，而不是它么得用。我反复排查，最后发现其实代码根本没什么问题，确实就是它没有压低显存峰值。将seq_len从测试用toy-model的32改成1024，就得到了第二张图内的数据，看上去就正常多了。&lt;/p&gt;
+&lt;p&gt;这其实说明一件事：SAC对于seq_len不是非常长的情况，能够产生的收益非常有限，而且整体的量级并不如传统的博客、资料当中描述的那么明显。这很可能是因为SAC出现的时间早于Flash Attention导致的。后者虽然在scope上是一个对于计算局部性的著名Kernel优化，但无意当中抢走了Selective Activation Checkpointing的饭碗，直接让SAC按标准注意力实现的优化收益标准彻底无效了。&lt;/p&gt;
+&lt;p&gt;实际上，在Flash Attention被发明之后，SAC的：因为Flash Attention的计算流根本不物化那个巨大的完整的注意力矩阵，而SAC最初出现的主要目的就是为了规避这个巨大矩阵带来的显存占用问题，导致它从一个几乎是不做到最好就完全不能进行大模型训练的核心技术，退居为一个只要做的合理就能产生合理收益的技术。它节省的现在主要是，超长序列带来的中间激活值的膨胀问题，而不再是一个万能万灵的通用手段。&lt;/p&gt;
+&lt;h3 id="如果sac特别慢可能发生了什么"&gt;如果SAC特别慢，可能发生了什么
+&lt;/h3&gt;&lt;p&gt;另一个问题是在测试的时候发现SAC特别慢，到了难以忍受的地步。这个其实是个bug，其来源让人好笑，是调试的时候加上的&lt;code&gt;ActivationCheckpointWrapper.forward&lt;/code&gt; 中debug设置导致的：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;7
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;checkpoint_fn(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;inner_module,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;*&lt;/span&gt;args,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;...&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; debug&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#66d9ef"&gt;True&lt;/span&gt;, &lt;span style="color:#75715e"&gt;# ← 硬编码!&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;**&lt;/span&gt;kwargs,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;从机制原理上来说，这个&lt;code&gt;torch.utils.checkpoint.checkpoint(debug=True)&lt;/code&gt; 的设置会激活一个 &lt;code&gt;TorchDispatchMode&lt;/code&gt;, &lt;strong&gt;给原始forward装上Python级dispatch&lt;/strong&gt;。这是为了使得每个op能够经过Python一遍，以完整记录元数据，进一步为了recompute时检测不一致，能够给出方便调试的友好错误。这原本是为了。然而，改完了之后却忘了改回来，随后彻底忘记了这件事，搞得我在之后做集成测试的时候奇慢无比，浪费了很多时间（起码多花了一个多小时，多花了五六十块钱，呜呜呜）。&lt;/p&gt;
+&lt;p&gt;如果大家遇到类似表现的问题，记得排查这个设置有没有改对。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #7 ZeRO-3模式：抽象设计、Bug排查和教训总结</title><link>https://Koas-W.github.io/posts/20260513zero3/</link><pubDate>Wed, 13 May 2026 23:41:44 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260513zero3/</guid><description>&lt;p&gt;今天的工作量实现的是我个人认为到目前以来最难的一个组件：ZeRO-3。在整个开发的过程中，不仅需要修改的代码量很大、不可避免的产生了许多侵入式的修改，而且即使设计已经相当小心，还是产生了许多复杂的bug。我们首先回顾一下不同ZeRO等级的切分情况，来为下面的总结做铺垫。&lt;/p&gt;
 &lt;table&gt;
  &lt;thead&gt;
  &lt;tr&gt;
