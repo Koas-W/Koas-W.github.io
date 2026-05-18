@@ -1,0 +1,578 @@
+<!doctype html><html lang=zh-cn dir=ltr><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><meta name=description content="这几天的工作量是实现了3P并行当中的最后一环：流水线并行，Pipeline Parallelism。这个并行理论上在Pico-vLLM的推理场景当中也同样有意义，但却碍于工程量问题未能真实实现，因此在Femtotron中对它进行真正的实现也算是弥补了遗憾。这次的博客更新之所以隔了这么多天，是因为这个并行的工程量意外的大，而且和之前的ZeRO系列一样，具有极多麻烦的边界情况问题。下面讲一讲原理、核心的设计抽象，以及中途遇到的值得一提的问题，以供后来人和读者参考，希望有所帮助。\n"><title>Femtotron开发日志 #9 流水线并行 Pipeline Parallelism</title><link rel=canonical href=https://Koas-W.github.io/posts/20260517-pipelineparallel/><link rel=preconnect href=https://fonts.googleapis.com><link rel=preconnect href=https://fonts.gstatic.com crossorigin><link rel=preload as=style href="https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap"><link rel=stylesheet href="https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap"><link rel=stylesheet href=/scss/style.min.6bf79b2ae61c7ba8e62d3e21035ac47f8019793860d8b6ad3a39a56fc20975a5.css><meta property='og:title' content="Femtotron开发日志 #9 流水线并行 Pipeline Parallelism"><meta property='og:description' content="这几天的工作量是实现了3P并行当中的最后一环：流水线并行，Pipeline Parallelism。这个并行理论上在Pico-vLLM的推理场景当中也同样有意义，但却碍于工程量问题未能真实实现，因此在Femtotron中对它进行真正的实现也算是弥补了遗憾。这次的博客更新之所以隔了这么多天，是因为这个并行的工程量意外的大，而且和之前的ZeRO系列一样，具有极多麻烦的边界情况问题。下面讲一讲原理、核心的设计抽象，以及中途遇到的值得一提的问题，以供后来人和读者参考，希望有所帮助。\n"><meta property='og:url' content='https://Koas-W.github.io/posts/20260517-pipelineparallel/'><meta property='og:site_name' content='Fain的Blog'><meta property='og:type' content='article'><meta property='article:section' content='Posts'><meta property='article:tag' content='Megatron'><meta property='article:tag' content='训练框架'><meta property='article:tag' content='预训练'><meta property='article:published_time' content='2026-05-17T23:26:30+08:00'><meta property='article:modified_time' content='2026-05-17T23:26:30+08:00'><meta name=twitter:title content="Femtotron开发日志 #9 流水线并行 Pipeline Parallelism"><meta name=twitter:description content="这几天的工作量是实现了3P并行当中的最后一环：流水线并行，Pipeline Parallelism。这个并行理论上在Pico-vLLM的推理场景当中也同样有意义，但却碍于工程量问题未能真实实现，因此在Femtotron中对它进行真正的实现也算是弥补了遗憾。这次的博客更新之所以隔了这么多天，是因为这个并行的工程量意外的大，而且和之前的ZeRO系列一样，具有极多麻烦的边界情况问题。下面讲一讲原理、核心的设计抽象，以及中途遇到的值得一提的问题，以供后来人和读者参考，希望有所帮助。\n"><script>(function(){const e=(new Date).getHours();let t="";e>=5&&e<10?t="/img/morning.png":e>=10&&e<15?t="/img/noon.png":e>=15&&e<20?t="/img/evening.png":t="/img/night.png",document.documentElement.style.setProperty("--bg-image",`url(${t})`)})()</script></head><body class=article-page><script>(function(){const e="StackColorScheme";localStorage.getItem(e)||localStorage.setItem(e,"auto")})()</script><script>(function(){const t="StackColorScheme",e=localStorage.getItem(t),n=window.matchMedia("(prefers-color-scheme: dark)").matches===!0;e=="dark"||e==="auto"&&n?document.documentElement.dataset.scheme="dark":document.documentElement.dataset.scheme="light"})()</script><div class="container main-container flex on-phone--column extended"><aside class="sidebar left-sidebar sticky"><button class="hamburger hamburger--spin" type=button id=toggle-menu aria-label="Toggle Menu">
+<span class=hamburger-box><span class=hamburger-inner></span></span></button><header><figure class=site-avatar><a href=/><img src=/img/avatar.jpg width=350 height=350 class=site-logo loading=lazy alt=Avatar>
+</a><span class=emoji>🍥</span></figure><div class=site-meta><h1 class=site-name><a href=/>Fain的Blog</a></h1><h2 class=site-description>博士生在读，AI infra/LLM算法绝赞学习中，目标是成为世一码</h2></div></header><ol class=menu-social><li><a href=mailto:wang-yf23@mails.tsinghua.edu.cn title=Email📮 rel=me><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg></a></li><li><a href=https://github.com/Koas-W title=GitHub🖥️ rel=me><svg class="icon icon-tabler icon-tabler-brand-github" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6.0 00-1.3-3.2 4.2 4.2.0 00-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3.0 00-6.2.0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2.0 00-.1 3.2A4.6 4.6.0 004 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg></a></li></ol><ol class=menu id=main-menu><li><a href=/><span>首页</span></a></li><li><a href=/posts/><span>文章</span></a></li><li><a href=/about/><span>关于</span></a></li><li><a href=/links/><span>项目仓库</span></a></li><li class=menu-bottom-section><ol class=menu><li id=dark-mode-toggle><svg class="icon icon-tabler icon-tabler-toggle-left" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="8" cy="12" r="2"/><rect x="2" y="6" width="20" height="12" rx="6"/></svg>
+<svg class="icon icon-tabler icon-tabler-toggle-right" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="16" cy="12" r="2"/><rect x="2" y="6" width="20" height="12" rx="6"/></svg>
+<span>Dark Mode</span></li></ol></li></ol></aside><aside class="sidebar right-sidebar sticky"><section class="widget archives"><div class=widget-icon><svg class="icon icon-tabler icon-tabler-hash" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><line x1="5" y1="9" x2="19" y2="9"/><line x1="5" y1="15" x2="19" y2="15"/><line x1="11" y1="4" x2="7" y2="20"/><line x1="17" y1="4" x2="13" y2="20"/></svg></div><h2 class="widget-title section-title">Table of contents</h2><div class=widget--toc><nav class=toc-nav id=TableOfContents><ul><li><a href=#流水线并行的原理>流水线并行的原理</a></li><li><a href=#流水线并行的核心设计架构和抽象>流水线并行的核心设计架构和抽象</a><ul><li><a href=#流水线模型模块>流水线模型模块</a></li><li><a href=#调度模块>调度模块</a></li></ul></li><li><a href=#值得注意的bug>值得注意的Bug</a><ul><li><a href=#rotary-inv_freq的garbage初始化问题>Rotary inv_freq的garbage初始化问题</a></li><li><a href=#一个不算bug的奇怪问题>一个不算bug的奇怪问题</a></li></ul></li><li><a href=#zero-3--pp时会发生的显存占用和计算效率问题>ZeRO-3 + PP时会发生的显存占用和计算效率问题</a><ul><li><a href=#autograd-held-view现象>autograd-held view现象</a></li><li><a href=#通信组communication-group划分导致显存的不降反增>通信组（Communication Group）划分导致显存的不降反增</a></li><li><a href=#工业界的解决方案>工业界的解决方案</a></li></ul></li><li><a href=#逸闻>逸闻</a></li><li><a href=#总结>总结</a></li></ul></nav></div></section></aside><main class="main full-width"><article class=main-article><header class=article-header><div class=article-details><header class=article-category><a href=/categories/%E5%BC%80%E5%8F%91%E6%97%A5%E5%BF%97/ style=background-color:#bebeef;color:#0f0f3d>开发日志</a></header><div class=article-title-wrapper><h2 class=article-title><a href=/posts/20260517-pipelineparallel/>Femtotron开发日志 #9 流水线并行 Pipeline Parallelism</a></h2></div><footer class=article-meta><div class=inline-meta><svg class="icon icon-tabler icon-tabler-calendar-time" width="56" height="56" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><path d="M11.795 21H5a2 2 0 01-2-2V7a2 2 0 012-2h12a2 2 0 012 2v4"/><circle cx="18" cy="18" r="4"/><path d="M15 3v4"/><path d="M7 3v4"/><path d="M3 11h16"/><path d="M18 16.496V18l1 1"/></svg>
+<time class=article-time--published datetime=2026-05-17T23:26:30+08:00>Sunday, May 17, 2026</time>
+<svg class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
+<time class=article-time--reading>12 minutes read</time></div></footer></div></header><aside class=article-toc><details><summary><div class=article-toc-title><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-chevron-right"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 6l6 6-6 6"/></svg>
+<span>Table of contents</span></div></summary><nav class=toc-nav><ul><li><a href=#流水线并行的原理>流水线并行的原理</a></li><li><a href=#流水线并行的核心设计架构和抽象>流水线并行的核心设计架构和抽象</a><ul><li><a href=#流水线模型模块>流水线模型模块</a></li><li><a href=#调度模块>调度模块</a></li></ul></li><li><a href=#值得注意的bug>值得注意的Bug</a><ul><li><a href=#rotary-inv_freq的garbage初始化问题>Rotary inv_freq的garbage初始化问题</a></li><li><a href=#一个不算bug的奇怪问题>一个不算bug的奇怪问题</a></li></ul></li><li><a href=#zero-3--pp时会发生的显存占用和计算效率问题>ZeRO-3 + PP时会发生的显存占用和计算效率问题</a><ul><li><a href=#autograd-held-view现象>autograd-held view现象</a></li><li><a href=#通信组communication-group划分导致显存的不降反增>通信组（Communication Group）划分导致显存的不降反增</a></li><li><a href=#工业界的解决方案>工业界的解决方案</a></li></ul></li><li><a href=#逸闻>逸闻</a></li><li><a href=#总结>总结</a></li></ul></nav></details></aside><section class=article-content><p>这几天的工作量是实现了3P并行当中的最后一环：流水线并行，Pipeline Parallelism。这个并行理论上在Pico-vLLM的推理场景当中也同样有意义，但却碍于工程量问题未能真实实现，因此在Femtotron中对它进行真正的实现也算是弥补了遗憾。这次的博客更新之所以隔了这么多天，是因为这个并行的工程量意外的大，而且和之前的ZeRO系列一样，具有极多麻烦的边界情况问题。下面讲一讲原理、核心的设计抽象，以及中途遇到的值得一提的问题，以供后来人和读者参考，希望有所帮助。</p><h2 id=流水线并行的原理>流水线并行的原理</h2><p>应该没有人不能理解PP的原理是什么。它在概念上极其简单：在tokenizer-若干个layer-lm head这个前向传播的维度上，按某种原则进行切分，将切分的结果依次分配到不同的GPU上，并且在它们之间协调一组调度和通信内容、顺序的过程。直观上，就是把模型按纵向维度切分，一段段的放在GPU的rank0,1,2...上，依次往前做，反向传播的时候再反过来。</p><p>问题是它的实现同样很麻烦。下面会详细讲讲这些问题。</p><h2 id=流水线并行的核心设计架构和抽象>流水线并行的核心设计架构和抽象</h2><p>流水线并行的核心问题在于处理不同stage之间的次要异质性。对于中间阶段，无论如何，输入和输出都是一样的，完全同质化。然而，对于第一个stage和最后一个stage就不一样了。对于第一个stage来说，其输入不是Hidden state而是word Embedding的向量；对于最后一个stage来说区分更明显，要多做一个lm head，而且随着场景变化可能要物化一个巨大的vocab table，导致额外的计算量和内存峰值。在主流实践当中，如果有此类需求，我们通常会微调layer数量的分配，在最后一个stage上有意减少普通layer的数量，以达到更好的负载均衡。我们的框架为此专门实现了可调节每个stage layer数量的可配置方案；不过为了使用方便起见，我们大多数时候会采用默认的均匀配置。</p><h3 id=流水线模型模块>流水线模型模块</h3><p>和前面的惯用伎俩一样，就是用一个warpper把切分的layer们包裹起来，异质性的复杂度也在这一层处理。首先是warpper内部包裹的东西：</p><div class=highlight><div style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><table style=border-spacing:0;padding:0;margin:0;border:0><tr><td style=vertical-align:top;padding:0;margin:0;border:0><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">  1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">  2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">  3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">  4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">  5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">  6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">  7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">  8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">  9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 28
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 29
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 30
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 31
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 32
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 33
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 34
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 35
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 36
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 37
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 38
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 39
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 40
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 41
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 42
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 43
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 44
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 45
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 46
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 47
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 48
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 49
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 50
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 51
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 52
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 53
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 54
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 55
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 56
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 57
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 58
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 59
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 60
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 61
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 62
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 63
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 64
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 65
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 66
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 67
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 68
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 69
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 70
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 71
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 72
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 73
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 74
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 75
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 76
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 77
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 78
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 79
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 80
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 81
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 82
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 83
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 84
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 85
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 86
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 87
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 88
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 89
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 90
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 91
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 92
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 93
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 94
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 95
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 96
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 97
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 98
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 99
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">100
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">101
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">102
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">103
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">104
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">105
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">106
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">107
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">108
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">109
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">110
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">111
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">112
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">113
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">114
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">115
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">116
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">117
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">118
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">119
+</span></code></pre></td><td style=vertical-align:top;padding:0;margin:0;border:0;width:100%><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-python data-lang=python><span style=display:flex><span><span style=color:#66d9ef>class</span> <span style=color:#a6e22e>LlamaPartialModel</span>(nn<span style=color:#f92672>.</span>Module):
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>def</span> <span style=color:#a6e22e>__init__</span>(
+</span></span><span style=display:flex><span>        self,
+</span></span><span style=display:flex><span>        model_config: LlamaConfig,
+</span></span><span style=display:flex><span>        parallel_ctx: ParallelContext,
+</span></span><span style=display:flex><span>        layer_range: range <span style=color:#f92672>|</span> <span style=color:#66d9ef>None</span> <span style=color:#f92672>=</span> <span style=color:#66d9ef>None</span>,
+</span></span><span style=display:flex><span>        is_first: bool <span style=color:#f92672>|</span> <span style=color:#66d9ef>None</span> <span style=color:#f92672>=</span> <span style=color:#66d9ef>None</span>,
+</span></span><span style=display:flex><span>        is_last: bool <span style=color:#f92672>|</span> <span style=color:#66d9ef>None</span> <span style=color:#f92672>=</span> <span style=color:#66d9ef>None</span>,  <span style=color:#75715e># None = 从 layer_range 自动推导</span>
+</span></span><span style=display:flex><span>    ):
+</span></span><span style=display:flex><span>        <span style=color:#e6db74>&#34;&#34;&#34;
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>        Args:
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            model_config: HF LlamaConfig
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            parallel_ctx: 并行上下文。目前仅存储,未在 forward 中使用;
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>                          预留给未来需要 PP/TP-aware 行为的扩展
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            layer_range: 本 stage 持有的 layer indices(全局编号,
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>                          就是 LlamaDecoderLayer.layer_idx 的值)。
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>                          None 表示持有全部 layers
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            is_first: 是否第一个 stage(持有 embed_tokens)
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            is_last: 是否最后一个 stage(持有 final norm)
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>        
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>        Raises:
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            ValueError: layer_range 越界,或 layer_range 不是 range 类型
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>        &#34;&#34;&#34;</span>
+</span></span><span style=display:flex><span>        super()<span style=color:#f92672>.</span><span style=color:#a6e22e>__init__</span>()
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> is_first <span style=color:#f92672>is</span> <span style=color:#66d9ef>None</span>:
+</span></span><span style=display:flex><span>            is_first <span style=color:#f92672>=</span> (layer_range<span style=color:#f92672>.</span>start <span style=color:#f92672>==</span> <span style=color:#ae81ff>0</span>)
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> is_last <span style=color:#f92672>is</span> <span style=color:#66d9ef>None</span>:
+</span></span><span style=display:flex><span>            is_last <span style=color:#f92672>=</span> (layer_range<span style=color:#f92672>.</span>stop <span style=color:#f92672>==</span> model_config<span style=color:#f92672>.</span>num_hidden_layers)
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> getattr(model_config, <span style=color:#e6db74>&#34;attn_implementation&#34;</span>, <span style=color:#66d9ef>None</span>) <span style=color:#f92672>is</span> <span style=color:#66d9ef>None</span>:
+</span></span><span style=display:flex><span>            impl <span style=color:#f92672>=</span> getattr(model_config, <span style=color:#e6db74>&#34;attn_implementation&#34;</span>, <span style=color:#66d9ef>None</span>) <span style=color:#f92672>or</span> <span style=color:#e6db74>&#34;sdpa&#34;</span>
+</span></span><span style=display:flex><span>            model_config<span style=color:#f92672>.</span>_attn_implementation <span style=color:#f92672>=</span> impl
+</span></span><span style=display:flex><span>    
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>config <span style=color:#f92672>=</span> model_config
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>parallel_ctx <span style=color:#f92672>=</span> parallel_ctx
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>layer_range <span style=color:#f92672>=</span> layer_range
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>is_first <span style=color:#f92672>=</span> is_first
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>is_last <span style=color:#f92672>=</span> is_last
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        <span style=color:#75715e># First stage: embed_tokens</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> is_first:
+</span></span><span style=display:flex><span>            self<span style=color:#f92672>.</span>embed_tokens <span style=color:#f92672>=</span> nn<span style=color:#f92672>.</span>Embedding(
+</span></span><span style=display:flex><span>                model_config<span style=color:#f92672>.</span>vocab_size,
+</span></span><span style=display:flex><span>                model_config<span style=color:#f92672>.</span>hidden_size,
+</span></span><span style=display:flex><span>                padding_idx<span style=color:#f92672>=</span>model_config<span style=color:#f92672>.</span>pad_token_id,
+</span></span><span style=display:flex><span>            )
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>layers <span style=color:#f92672>=</span> nn<span style=color:#f92672>.</span>ModuleDict({
+</span></span><span style=display:flex><span>            str(idx): LlamaDecoderLayer(model_config, layer_idx<span style=color:#f92672>=</span>idx)
+</span></span><span style=display:flex><span>            <span style=color:#66d9ef>for</span> idx <span style=color:#f92672>in</span> layer_range
+</span></span><span style=display:flex><span>        })
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>rotary_emb <span style=color:#f92672>=</span> LlamaRotaryEmbedding(config<span style=color:#f92672>=</span>model_config)
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        <span style=color:#75715e># Last stage: final RMSNorm</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> is_last:
+</span></span><span style=display:flex><span>            self<span style=color:#f92672>.</span>norm <span style=color:#f92672>=</span> LlamaRMSNorm(
+</span></span><span style=display:flex><span>                model_config<span style=color:#f92672>.</span>hidden_size,
+</span></span><span style=display:flex><span>                eps<span style=color:#f92672>=</span>model_config<span style=color:#f92672>.</span>rms_norm_eps,
+</span></span><span style=display:flex><span>            )
+</span></span><span style=display:flex><span>    
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>def</span> <span style=color:#a6e22e>forward</span>(
+</span></span><span style=display:flex><span>        self,
+</span></span><span style=display:flex><span>        x: torch<span style=color:#f92672>.</span>Tensor,
+</span></span><span style=display:flex><span>        attention_mask: torch<span style=color:#f92672>.</span>Tensor <span style=color:#f92672>|</span> <span style=color:#66d9ef>None</span> <span style=color:#f92672>=</span> <span style=color:#66d9ef>None</span>,
+</span></span><span style=display:flex><span>        position_ids: torch<span style=color:#f92672>.</span>Tensor <span style=color:#f92672>|</span> <span style=color:#66d9ef>None</span> <span style=color:#f92672>=</span> <span style=color:#66d9ef>None</span>,
+</span></span><span style=display:flex><span>    ) <span style=color:#f92672>-&gt;</span> torch<span style=color:#f92672>.</span>Tensor:
+</span></span><span style=display:flex><span>        <span style=color:#e6db74>&#34;&#34;&#34;
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>        Args:
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            x:
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>                - is_first=True:  input_ids,LongTensor[B, S]
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>                - is_first=False: hidden_states,float[B, S, H]
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            attention_mask: 默认 None
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            position_ids: 默认 None
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>        
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>        Returns:
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            hidden_states float[B, S, H]
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            - 非 last stage: layers 输出(未经 final norm)
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            - last stage: 经过 final norm 的 hidden_states
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>        &#34;&#34;&#34;</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e># Embed (first stage only)</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> self<span style=color:#f92672>.</span>is_first:
+</span></span><span style=display:flex><span>            hidden_states <span style=color:#f92672>=</span> self<span style=color:#f92672>.</span>embed_tokens(x)
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>else</span>:
+</span></span><span style=display:flex><span>            hidden_states <span style=color:#f92672>=</span> x
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        bsz, seqlen, _ <span style=color:#f92672>=</span> hidden_states<span style=color:#f92672>.</span>shape
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> position_ids <span style=color:#f92672>is</span> <span style=color:#66d9ef>None</span>:
+</span></span><span style=display:flex><span>            position_ids <span style=color:#f92672>=</span> torch<span style=color:#f92672>.</span>arange(
+</span></span><span style=display:flex><span>                seqlen, device<span style=color:#f92672>=</span>hidden_states<span style=color:#f92672>.</span>device, dtype<span style=color:#f92672>=</span>torch<span style=color:#f92672>.</span>long,
+</span></span><span style=display:flex><span>            )<span style=color:#f92672>.</span>unsqueeze(<span style=color:#ae81ff>0</span>)
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        <span style=color:#f92672>from</span> transformers.masking_utils <span style=color:#f92672>import</span> create_causal_mask
+</span></span><span style=display:flex><span>        causal_mask <span style=color:#f92672>=</span> create_causal_mask(
+</span></span><span style=display:flex><span>            config<span style=color:#f92672>=</span>self<span style=color:#f92672>.</span>config,
+</span></span><span style=display:flex><span>            inputs_embeds<span style=color:#f92672>=</span>hidden_states,
+</span></span><span style=display:flex><span>            attention_mask<span style=color:#f92672>=</span>attention_mask,
+</span></span><span style=display:flex><span>            past_key_values<span style=color:#f92672>=</span><span style=color:#66d9ef>None</span>,
+</span></span><span style=display:flex><span>            position_ids<span style=color:#f92672>=</span>position_ids,
+</span></span><span style=display:flex><span>        )
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        position_embeddings <span style=color:#f92672>=</span> self<span style=color:#f92672>.</span>rotary_emb(hidden_states, position_ids<span style=color:#f92672>=</span>position_ids)
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>for</span> layer <span style=color:#f92672>in</span> self<span style=color:#f92672>.</span>layers<span style=color:#f92672>.</span>values():
+</span></span><span style=display:flex><span>            hidden_states <span style=color:#f92672>=</span> layer(
+</span></span><span style=display:flex><span>                hidden_states,
+</span></span><span style=display:flex><span>                attention_mask<span style=color:#f92672>=</span>causal_mask,
+</span></span><span style=display:flex><span>                position_embeddings<span style=color:#f92672>=</span>position_embeddings,
+</span></span><span style=display:flex><span>                position_ids<span style=color:#f92672>=</span>position_ids,
+</span></span><span style=display:flex><span>                past_key_values<span style=color:#f92672>=</span><span style=color:#66d9ef>None</span>,
+</span></span><span style=display:flex><span>                use_cache<span style=color:#f92672>=</span><span style=color:#66d9ef>False</span>,
+</span></span><span style=display:flex><span>            )
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> self<span style=color:#f92672>.</span>is_last:
+</span></span><span style=display:flex><span>            hidden_states <span style=color:#f92672>=</span> self<span style=color:#f92672>.</span>norm(hidden_states)
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>return</span> hidden_states
+</span></span></code></pre></td></tr></table></div></div><p>然后是warpper本身：</p><div class=highlight><div style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><table style=border-spacing:0;padding:0;margin:0;border:0><tr><td style=vertical-align:top;padding:0;margin:0;border:0><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">28
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">29
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">30
+</span></code></pre></td><td style=vertical-align:top;padding:0;margin:0;border:0;width:100%><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-python data-lang=python><span style=display:flex><span><span style=color:#66d9ef>class</span> <span style=color:#a6e22e>LlamaForCausalLM</span>(BaseCausalLMPipeline):
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>def</span> <span style=color:#a6e22e>__init__</span>(
+</span></span><span style=display:flex><span>        self,
+</span></span><span style=display:flex><span>        config: LlamaConfig,
+</span></span><span style=display:flex><span>        parallel_ctx: ParallelContext,
+</span></span><span style=display:flex><span>        layer_range: range <span style=color:#f92672>|</span> <span style=color:#66d9ef>None</span> <span style=color:#f92672>=</span> <span style=color:#66d9ef>None</span>,
+</span></span><span style=display:flex><span>    ):
+</span></span><span style=display:flex><span>        super()<span style=color:#f92672>.</span><span style=color:#a6e22e>__init__</span>()
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>config <span style=color:#f92672>=</span> config
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>hidden_size <span style=color:#f92672>=</span> config<span style=color:#f92672>.</span>hidden_size
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>model <span style=color:#f92672>=</span> LlamaPartialModel(
+</span></span><span style=display:flex><span>            model_config<span style=color:#f92672>=</span>config,
+</span></span><span style=display:flex><span>            parallel_ctx<span style=color:#f92672>=</span>parallel_ctx,
+</span></span><span style=display:flex><span>            layer_range<span style=color:#f92672>=</span>layer_range,
+</span></span><span style=display:flex><span>        )
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>is_first <span style=color:#f92672>=</span> self<span style=color:#f92672>.</span>model<span style=color:#f92672>.</span>is_first
+</span></span><span style=display:flex><span>        self<span style=color:#f92672>.</span>is_last <span style=color:#f92672>=</span> self<span style=color:#f92672>.</span>model<span style=color:#f92672>.</span>is_last
+</span></span><span style=display:flex><span>        
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> self<span style=color:#f92672>.</span>is_last:
+</span></span><span style=display:flex><span>            self<span style=color:#f92672>.</span>lm_head <span style=color:#f92672>=</span> nn<span style=color:#f92672>.</span>Linear(
+</span></span><span style=display:flex><span>                config<span style=color:#f92672>.</span>hidden_size, config<span style=color:#f92672>.</span>vocab_size, bias<span style=color:#f92672>=</span><span style=color:#66d9ef>False</span>,
+</span></span><span style=display:flex><span>            )
+</span></span><span style=display:flex><span>            
+</span></span><span style=display:flex><span>        <span style=color:#75715e># 暂时不支持tie_word_embeddings</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> config<span style=color:#f92672>.</span>tie_word_embeddings:
+</span></span><span style=display:flex><span>            <span style=color:#66d9ef>raise</span> <span style=color:#a6e22e>NotImplementedError</span>(
+</span></span><span style=display:flex><span>                <span style=color:#e6db74>&#34;LlamaForCausalLM 目前不支持 tie_word_embeddings=True&#34;</span>
+</span></span><span style=display:flex><span>            )
+</span></span></code></pre></td></tr></table></div></div><p>可以看到，实现本身还是比较直白简洁的。复杂性和前面遇到的各类杂七杂八问题一样：还是在边界情况里。</p><h3 id=调度模块>调度模块</h3><p>流水线并行和调度必须一起做，缺一不可。这里我们实现了baseline的all then all调度（先全部前向传播，然后再全部反向传播）作为基线，然后实现了基础的1F1B调度（通过交错排列前向传播和反向传播来降低空泡率）。未来可能还会增加更多的调度策略，这也是在规划内的。它们的原理在开源资料里已经得到了很详细的普及了，因此这里不详细展开。它们的代码如下：</p><div class=highlight><div style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><table style=border-spacing:0;padding:0;margin:0;border:0><tr><td style=vertical-align:top;padding:0;margin:0;border:0><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">28
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">29
+</span></code></pre></td><td style=vertical-align:top;padding:0;margin:0;border:0;width:100%><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-python data-lang=python><span style=display:flex><span><span style=color:#66d9ef>def</span> <span style=color:#a6e22e>gpipe_schedule</span>(
+</span></span><span style=display:flex><span>    num_microbatches: int,
+</span></span><span style=display:flex><span>    is_first: bool,
+</span></span><span style=display:flex><span>    is_last: bool,
+</span></span><span style=display:flex><span>) <span style=color:#f92672>-&gt;</span> list[PPAction]:
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> num_microbatches <span style=color:#f92672>&lt;</span> <span style=color:#ae81ff>1</span>:
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>raise</span> <span style=color:#a6e22e>ValueError</span>(<span style=color:#e6db74>f</span><span style=color:#e6db74>&#34;num_microbatches must be &gt;= 1, got </span><span style=color:#e6db74>{</span>num_microbatches<span style=color:#e6db74>}</span><span style=color:#e6db74>&#34;</span>)
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    actions: list[PPAction] <span style=color:#f92672>=</span> []
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#75715e># ── Forward phase: mb 0, 1, ..., N-1 ──</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>for</span> mb <span style=color:#f92672>in</span> range(num_microbatches):
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> <span style=color:#f92672>not</span> is_first:
+</span></span><span style=display:flex><span>            actions<span style=color:#f92672>.</span>append(RecvForward(mb))   <span style=color:#75715e># recv hidden from prev stage</span>
+</span></span><span style=display:flex><span>        actions<span style=color:#f92672>.</span>append(Forward(mb))         <span style=color:#75715e># forward through model</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> <span style=color:#f92672>not</span> is_last:
+</span></span><span style=display:flex><span>            actions<span style=color:#f92672>.</span>append(SendForward(mb))    <span style=color:#75715e># send hidden to next stage</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#75715e># ── Backward phase: mb N-1, N-2, ..., 0 ──</span>
+</span></span><span style=display:flex><span>    <span style=color:#75715e># Reversed order matches LIFO of the autograd graph each mb&#39;s activations</span>
+</span></span><span style=display:flex><span>    <span style=color:#75715e># are released after its backward, allowing early memory reuse.</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>for</span> mb <span style=color:#f92672>in</span> reversed(range(num_microbatches)):
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> <span style=color:#f92672>not</span> is_last:
+</span></span><span style=display:flex><span>            actions<span style=color:#f92672>.</span>append(RecvBackward(mb))   <span style=color:#75715e># recv grad_output from next stage</span>
+</span></span><span style=display:flex><span>        actions<span style=color:#f92672>.</span>append(Backward(mb))         <span style=color:#75715e># backward, accumulate param grads</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> <span style=color:#f92672>not</span> is_first:
+</span></span><span style=display:flex><span>            actions<span style=color:#f92672>.</span>append(SendBackward(mb))    <span style=color:#75715e># send grad_input to prev stage</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>return</span> actions
+</span></span></code></pre></td></tr></table></div></div><div class=highlight><div style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><table style=border-spacing:0;padding:0;margin:0;border:0><tr><td style=vertical-align:top;padding:0;margin:0;border:0><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">28
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">29
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">30
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">31
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">32
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">33
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">34
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">35
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">36
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">37
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">38
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">39
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">40
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">41
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">42
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">43
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">44
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">45
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">46
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">47
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">48
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">49
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">50
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">51
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">52
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">53
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">54
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">55
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">56
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">57
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">58
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">59
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">60
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">61
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">62
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">63
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">64
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">65
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">66
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">67
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">68
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">69
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">70
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">71
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">72
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">73
+</span></code></pre></td><td style=vertical-align:top;padding:0;margin:0;border:0;width:100%><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-python data-lang=python><span style=display:flex><span><span style=color:#66d9ef>def</span> <span style=color:#a6e22e>one_f_one_b_schedule</span>(
+</span></span><span style=display:flex><span>    num_microbatches: int,
+</span></span><span style=display:flex><span>    pp_size: int,
+</span></span><span style=display:flex><span>    pp_rank: int,
+</span></span><span style=display:flex><span>) <span style=color:#f92672>-&gt;</span> list[PPAction]:
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> num_microbatches <span style=color:#f92672>&lt;</span> <span style=color:#ae81ff>1</span>:
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>raise</span> <span style=color:#a6e22e>ValueError</span>(<span style=color:#e6db74>f</span><span style=color:#e6db74>&#34;num_microbatches must be &gt;= 1, got </span><span style=color:#e6db74>{</span>num_microbatches<span style=color:#e6db74>}</span><span style=color:#e6db74>&#34;</span>)
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> pp_size <span style=color:#f92672>&lt;</span> <span style=color:#ae81ff>1</span>:
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>raise</span> <span style=color:#a6e22e>ValueError</span>(<span style=color:#e6db74>f</span><span style=color:#e6db74>&#34;pp_size must be &gt;= 1, got </span><span style=color:#e6db74>{</span>pp_size<span style=color:#e6db74>}</span><span style=color:#e6db74>&#34;</span>)
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>if</span> pp_rank <span style=color:#f92672>&lt;</span> <span style=color:#ae81ff>0</span> <span style=color:#f92672>or</span> pp_rank <span style=color:#f92672>&gt;=</span> pp_size:
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>raise</span> <span style=color:#a6e22e>ValueError</span>(<span style=color:#e6db74>f</span><span style=color:#e6db74>&#34;pp_rank must be in [0, </span><span style=color:#e6db74>{</span>pp_size<span style=color:#e6db74>}</span><span style=color:#e6db74>), got </span><span style=color:#e6db74>{</span>pp_rank<span style=color:#e6db74>}</span><span style=color:#e6db74>&#34;</span>)
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    is_first <span style=color:#f92672>=</span> (pp_rank <span style=color:#f92672>==</span> <span style=color:#ae81ff>0</span>)
+</span></span><span style=display:flex><span>    is_last <span style=color:#f92672>=</span> (pp_rank <span style=color:#f92672>==</span> pp_size <span style=color:#f92672>-</span> <span style=color:#ae81ff>1</span>)
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    num_warmup <span style=color:#f92672>=</span> min(pp_size <span style=color:#f92672>-</span> <span style=color:#ae81ff>1</span> <span style=color:#f92672>-</span> pp_rank, num_microbatches)
+</span></span><span style=display:flex><span>    num_steady <span style=color:#f92672>=</span> num_microbatches <span style=color:#f92672>-</span> num_warmup
+</span></span><span style=display:flex><span>    num_cooldown <span style=color:#f92672>=</span> num_warmup  <span style=color:#75715e># by symmetry</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    actions: list[PPAction] <span style=color:#f92672>=</span> []
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#75715e># ── Phase 1: Warm-up forwards (fill the pipeline) ──</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>for</span> j <span style=color:#f92672>in</span> range(num_warmup):
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> <span style=color:#f92672>not</span> is_first:
+</span></span><span style=display:flex><span>            actions<span style=color:#f92672>.</span>append(RecvForward(mb_id<span style=color:#f92672>=</span>j))
+</span></span><span style=display:flex><span>        actions<span style=color:#f92672>.</span>append(Forward(mb_id<span style=color:#f92672>=</span>j))
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> <span style=color:#f92672>not</span> is_last:
+</span></span><span style=display:flex><span>            actions<span style=color:#f92672>.</span>append(SendForward(mb_id<span style=color:#f92672>=</span>j))
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#75715e># ── Phase 2: Steady-state 1F1B ──</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>for</span> k <span style=color:#f92672>in</span> range(num_steady):
+</span></span><span style=display:flex><span>        fwd_mb <span style=color:#f92672>=</span> num_warmup <span style=color:#f92672>+</span> k
+</span></span><span style=display:flex><span>        bwd_mb <span style=color:#f92672>=</span> k
+</span></span><span style=display:flex><span>        is_first_steady <span style=color:#f92672>=</span> (k <span style=color:#f92672>==</span> <span style=color:#ae81ff>0</span>)
+</span></span><span style=display:flex><span>        is_last_steady <span style=color:#f92672>=</span> (k <span style=color:#f92672>==</span> num_steady <span style=color:#f92672>-</span> <span style=color:#ae81ff>1</span>)
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e># F(fwd_mb): need its input</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>#   - first_steady &amp; not is_first: warmup did RF(0..warmup-1),</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>#     so explicit RF(fwd_mb) here</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>#   - subsequent: input arrived via prev iter&#39;s SBRF</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>#   - is_first: input from caller dict, no recv ever needed</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> is_first_steady <span style=color:#f92672>and</span> <span style=color:#f92672>not</span> is_first:
+</span></span><span style=display:flex><span>            actions<span style=color:#f92672>.</span>append(RecvForward(mb_id<span style=color:#f92672>=</span>fwd_mb))
+</span></span><span style=display:flex><span>        actions<span style=color:#f92672>.</span>append(Forward(mb_id<span style=color:#f92672>=</span>fwd_mb))
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e># Send F output forward + recv B grad backward (combined to avoid deadlock)</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> <span style=color:#f92672>not</span> is_last:
+</span></span><span style=display:flex><span>            actions<span style=color:#f92672>.</span>append(SendForwardRecvBackward(fwd_mb<span style=color:#f92672>=</span>fwd_mb, bwd_mb<span style=color:#f92672>=</span>bwd_mb))
+</span></span><span style=display:flex><span>        <span style=color:#75715e># else: last stage — no SF, no RB (loss provides grad locally)</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        actions<span style=color:#f92672>.</span>append(Backward(mb_id<span style=color:#f92672>=</span>bwd_mb))
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e># Send B grad backward + recv next F input (combined; or plain SB at end)</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> <span style=color:#f92672>not</span> is_first:
+</span></span><span style=display:flex><span>            <span style=color:#66d9ef>if</span> is_last_steady:
+</span></span><span style=display:flex><span>                <span style=color:#75715e># No more F to recv (cooldown only does B&#39;s)</span>
+</span></span><span style=display:flex><span>                actions<span style=color:#f92672>.</span>append(SendBackward(mb_id<span style=color:#f92672>=</span>bwd_mb))
+</span></span><span style=display:flex><span>            <span style=color:#66d9ef>else</span>:
+</span></span><span style=display:flex><span>                actions<span style=color:#f92672>.</span>append(SendBackwardRecvForward(
+</span></span><span style=display:flex><span>                    bwd_mb<span style=color:#f92672>=</span>bwd_mb, fwd_mb<span style=color:#f92672>=</span>fwd_mb <span style=color:#f92672>+</span> <span style=color:#ae81ff>1</span>,
+</span></span><span style=display:flex><span>                ))
+</span></span><span style=display:flex><span>        <span style=color:#75715e># else: first stage — no SB, no need for RF (input always from caller)</span>
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#75715e># ── Phase 3: Cool-down backwards (drain the pipeline) ──</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>for</span> j <span style=color:#f92672>in</span> range(num_cooldown):
+</span></span><span style=display:flex><span>        bwd_mb <span style=color:#f92672>=</span> num_steady <span style=color:#f92672>+</span> j
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> <span style=color:#f92672>not</span> is_last:
+</span></span><span style=display:flex><span>            actions<span style=color:#f92672>.</span>append(RecvBackward(mb_id<span style=color:#f92672>=</span>bwd_mb))
+</span></span><span style=display:flex><span>        actions<span style=color:#f92672>.</span>append(Backward(mb_id<span style=color:#f92672>=</span>bwd_mb))
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> <span style=color:#f92672>not</span> is_first:
+</span></span><span style=display:flex><span>            actions<span style=color:#f92672>.</span>append(SendBackward(mb_id<span style=color:#f92672>=</span>bwd_mb))
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>return</span> actions
+</span></span></code></pre></td></tr></table></div></div><h2 id=值得注意的bug>值得注意的Bug</h2><h3 id=rotary-inv_freq的garbage初始化问题>Rotary inv_freq的garbage初始化问题</h3><p><code>meta → to_empty(device)</code> 路径下,<code>persistent=False</code> 的buffer不会被初始化,留下未定义内存。Llama 的 rotary embedding 的<code>inv_freq</code> 就是这种buffer。</p><p>这导致模型forward出来的结果是garbage logits。关键是，由于它对于整个模型的精度影响平均下来也就~100到300个ULP上下，差点又一次没有发现，幸好仔细的人工校对了一遍。具体来说，是在Debug的时候，发现两个 rank 上的 <code>model.model.rotary_emb.inv_freq</code> 值不一样（随机初始化导致的垃圾值不相同），从而发现了问题。</p><p>解决方案是加了一个 <code>_reset_rotary_inv_freq(rotary_emb, config, device)</code> helper，在 test / random-init 路径下显式重算。生产路径下的 <code>ModelLoader</code> 已经遇到过一次这个问题并且解决过一遍，这次算是踩了重复的坑，这下记的更牢了。实际上，模型的莫名其妙的问题，以到现在的经验来看，几乎总是和buffer、cache，这些不属于模型参数但是又需要持久化的东西有关，也许确实是一个值得思考的整体模式问题。</p><div class=highlight><div style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><table style=border-spacing:0;padding:0;margin:0;border:0><tr><td style=vertical-align:top;padding:0;margin:0;border:0><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">8
+</span></code></pre></td><td style=vertical-align:top;padding:0;margin:0;border:0;width:100%><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-python data-lang=python><span style=display:flex><span><span style=color:#66d9ef>def</span> <span style=color:#a6e22e>_reset_rotary_inv_freq</span>(rotary_emb, config, device):
+</span></span><span style=display:flex><span>    base <span style=color:#f92672>=</span> getattr(config, <span style=color:#e6db74>&#34;rope_theta&#34;</span>, <span style=color:#ae81ff>10000.0</span>)
+</span></span><span style=display:flex><span>    dim <span style=color:#f92672>=</span> (getattr(config, <span style=color:#e6db74>&#34;head_dim&#34;</span>, <span style=color:#66d9ef>None</span>) <span style=color:#f92672>or</span>
+</span></span><span style=display:flex><span>           (config<span style=color:#f92672>.</span>hidden_size <span style=color:#f92672>//</span> config<span style=color:#f92672>.</span>num_attention_heads))
+</span></span><span style=display:flex><span>    inv_freq <span style=color:#f92672>=</span> <span style=color:#ae81ff>1.0</span> <span style=color:#f92672>/</span> (base <span style=color:#f92672>**</span> (
+</span></span><span style=display:flex><span>        torch<span style=color:#f92672>.</span>arange(<span style=color:#ae81ff>0</span>, dim, <span style=color:#ae81ff>2</span>, dtype<span style=color:#f92672>=</span>torch<span style=color:#f92672>.</span>int64)<span style=color:#f92672>.</span>to(device, torch<span style=color:#f92672>.</span>float) <span style=color:#f92672>/</span> dim
+</span></span><span style=display:flex><span>    ))
+</span></span><span style=display:flex><span>    rotary_emb<span style=color:#f92672>.</span>inv_freq<span style=color:#f92672>.</span>copy_(inv_freq<span style=color:#f92672>.</span>to(rotary_emb<span style=color:#f92672>.</span>inv_freq<span style=color:#f92672>.</span>dtype))
+</span></span></code></pre></td></tr></table></div></div><p>这个过程带给我们的教训是，任何用 <code>meta → to_empty</code> 的路径都要审计buffer是否被显式初始化。这很难依赖某种自动化规则，只能靠coder本人的实践经验和敏感性。</p><h3 id=一个不算bug的奇怪问题>一个不算bug的奇怪问题</h3><p>cuBLAS lazy context warning总是消除不掉。尝试了很多方法无果，遂放弃。先记录在这里，等到哪天遇到类似问题或者看到解决方案了，再来捣鼓它。</p><pre tabindex=0><code>UserWarning: Attempting to run cuBLAS, but there was no current CUDA context!
+</code></pre><h2 id=zero-3--pp时会发生的显存占用和计算效率问题>ZeRO-3 + PP时会发生的显存占用和计算效率问题</h2><p>虽然这听上去很奇怪，但这是真的。ZeRO-3 + PP加在一起不如两个都不加。在我的测试当中，ZeRO-3在很多情况下，不仅没有相对于ZeRO-2降低显存的占用，反而增加了其占用情况。在PP=1的情况下，这种情况尚且并不多见；在PP=2及以上，即采用PP并行的情况下，它几乎<strong>总是</strong>比ZeRO-2还要差。是SAC也拯救不了的那种，纯粹的占用了更多无法被释放的显存。</p><p>经过分析和多个配置参数的验证，这确实不是一个正确性问题，而是无法避免的机制冲突。也就是说：ZeRO-3 + PP是<strong>根本上不兼容</strong>的两个训练优化/并行化机制。个人认为这是一个挺反直觉（至少不能第一时间通过纸面理论察觉到）的结果，而且某种程度上令人感到沮丧：因为ZeRO-3本身的复杂度就奇高无比，而且我自己实现的时候也花了很多心血，但现在却发现它作为增量的收益远不如我们预期的多。不过无论如何，抛开这些投入成本不谈，我仍然查询了学界和工业界对此的理解和处理，并且确实得到了很多有意思的信息和结论、方案。下面讲讲我了解到的相关原理、机制解释，以及学术界、工业界对它们的处理方法。</p><h3 id=autograd-held-view现象>autograd-held view现象</h3><p>这是一个我发现了但是决定不解决的问题。它部分贡献了ZeRO-3在PP情况下的显存异常增加，但解决它可能造成潜在的破坏性影响。它的核心机制代码出现在ZeRO-3的unshard操作的下面这个地方：</p><div class=highlight><div style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><table style=border-spacing:0;padding:0;margin:0;border:0><tr><td style=vertical-align:top;padding:0;margin:0;border:0><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">7
+</span></code></pre></td><td style=vertical-align:top;padding:0;margin:0;border:0;width:100%><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-python data-lang=python><span style=display:flex><span><span style=color:#66d9ef>def</span> <span style=color:#a6e22e>unshard</span>(self):
+</span></span><span style=display:flex><span>    self<span style=color:#f92672>.</span>_full_buffer <span style=color:#f92672>=</span> torch<span style=color:#f92672>.</span>empty(self<span style=color:#f92672>.</span>padded_size, <span style=color:#f92672>...</span>)
+</span></span><span style=display:flex><span>    dist<span style=color:#f92672>.</span>all_gather_into_tensor(self<span style=color:#f92672>.</span>_full_buffer, self<span style=color:#f92672>.</span>flat_param_shard, <span style=color:#f92672>...</span>)
+</span></span><span style=display:flex><span>    
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>for</span> pg, layout <span style=color:#f92672>in</span> zip(<span style=color:#f92672>...</span>):
+</span></span><span style=display:flex><span>        slice_ <span style=color:#f92672>=</span> self<span style=color:#f92672>.</span>_full_buffer[<span style=color:#f92672>...</span>]
+</span></span><span style=display:flex><span>        pg<span style=color:#f92672>.</span>compute<span style=color:#f92672>.</span>data <span style=color:#f92672>=</span> slice_<span style=color:#f92672>.</span>view(layout<span style=color:#f92672>.</span>original_shape)  <span style=color:#75715e># ← view</span>
+</span></span></code></pre></td></tr></table></div></div><p>forward中，<code>y = x @ pg.compute</code>，autograd会在saved tape里存<code>pg.compute</code>这个tensor的 view，以为了backward计算dL/dx。这个view的storage就是<code>_full_buffer</code>的storage。</p><div class=highlight><div style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><table style=border-spacing:0;padding:0;margin:0;border:0><tr><td style=vertical-align:top;padding:0;margin:0;border:0><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">4
+</span></code></pre></td><td style=vertical-align:top;padding:0;margin:0;border:0;width:100%><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-python data-lang=python><span style=display:flex><span><span style=color:#66d9ef>def</span> <span style=color:#a6e22e>reshard</span>(self):
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>for</span> pg <span style=color:#f92672>in</span> self<span style=color:#f92672>.</span>param_groups:
+</span></span><span style=display:flex><span>        pg<span style=color:#f92672>.</span>compute<span style=color:#f92672>.</span>data <span style=color:#f92672>=</span> torch<span style=color:#f92672>.</span>empty(<span style=color:#ae81ff>0</span>, <span style=color:#f92672>...</span>)
+</span></span><span style=display:flex><span>    self<span style=color:#f92672>.</span>_full_buffer <span style=color:#f92672>=</span> <span style=color:#66d9ef>None</span>   <span style=color:#75715e># ← 我们的引用没了,但 autograd 还引用着</span>
+</span></span></code></pre></td></tr></table></div></div><p>1F1B的情况下，有很多个microbatch在in-flight，因此多份 <code>_full_buffer</code> 同时活着占用显存无法释放，直到对应mb的backward完成。</p><p>SAC能部分解决这个问题，因为SAC在backward时会直接重跑 forward 重算 activation，这次重算的unshard是short-lived 的,重算完直接reshard释放,autograd把它当作普通临时tensor而不是saved tensor，因此不持续占用显存，无论多少个microbatch都不会显著堆积。
+ZeRO-3 + AC的节省量通常大幅超过单纯"AC 省 activation"的节省量就是这个原因，多出来的部分就是消除autograd-held view的收益。</p><p>ZeRO-1/2没有这个问题，因为ZeRO-1/2不分片param,<code>compute.data</code> 全程是完整的 bf16 权重，因此不需要unshard buffer。</p><h4 id=相关问题>相关问题</h4><ul><li><strong>PyTorch FSDP2 RFC</strong>(GitHub issue #114299):</li></ul><blockquote><p>"FSDP uses <code>untyped_storage().resize_(0)</code> and <code>resize_(orig_storage_size)</code>. This is a hacky trick to make autograd work, even in the presence of aliases. Autograd packs a reference to unsharded_param ... in forward; FSDP frees the storage unbeknownst to autograd on the promise that it will restore it before the gradient computation in backward."</p></blockquote><p>FSDP2 用一个违反autograd契约的storage resize hack的技术方案来绕过，也就是说在autograd不知道的情况下释放了storage。这在工程上是可以的，但因为我们的个人项目最好要保持框架的简洁性，就不这么做了。</p><h3 id=通信组communication-group划分导致显存的不降反增>通信组（Communication Group）划分导致显存的不降反增</h3><p>在引入PP后，每一台机器（或每一张卡）只负责模型的一部分层。如果再引入ZeRO-3，那么理想状态下，单卡只存8层参数的$1/N$。但是，在实际上的训练现实当中，因为PP在前向传播时，每张卡都在高速、连续地处理不同的 Micro-batch（微批次）。为了不让流水线产生停顿和空泡，ZeRO-3必须为<strong>所有正在流水线中流动的Micro-batch</strong>预留足够的缓存空间，更激进来说甚至要提前拉取（Prefetch）并缓存完整的参数。这导致我们必须重新占用这些好不容易省下来的显存。为了应付多阶段流水线并发，被ZeRO-3的 <strong><code>All-Gather</code> 缓冲区、预取缓冲区（Prefetch Buffer）以及临时激活值</strong>很可能（实际上是几乎一定）最终被撑得比单纯用PP还要大！</p><p>这是一个从数学理论上无解的问题。因为如果不开这个缓冲区，那么通信就要序列化。如果通信序列化，那么流水线就会有空泡。如果流水线有空泡，那么整个训练的MFU就会下降。众所周知，MFU是一个比显存占用还要关键的指标，等同于公司每分每秒的真金白银。因此，二者不可兼得，只能不放在一起做了。</p><h3 id=工业界的解决方案>工业界的解决方案</h3><p>目前业界主流的训练架构（Meta、微软、英伟达、阿里...等等）在工程上的演化结果基本上没有同时采用两者的方案，而是以其中一种为主导发展出了两条完全平行的技术路线：</p><h5 id=路线一nvidia--megatron-派系-纯粹的-3d-并行--zero-12>路线一（NVIDIA / Megatron 派系）： 纯粹的 3D 并行 + ZeRO-1/2</h5><ul><li>**架构：**Tensor Parallel (TP) + Pipeline Parallel (PP) + Distributed Optimizer (ZeRO-2)。</li></ul><p>这一路线的核心逻辑是，只要用了 PP，就绝对<strong>不用任何参数分片（即不用 ZeRO-3）</strong>。参数的纵向拆分靠PP，横向拆分靠机器内的TP（NVLink的高速通信）。数据并行组只用ZeRO-2来切分优化器状态。这种组合基本上可以被认为是目前最稳定、大厂千卡乃至万卡的大规模严肃预训练场景中，MFU（算力利用率）最高的方案。</p><h5 id=路线二pytorch-原生--hugging-face-派系-fsdp-代替-zero-3--取代-pp>路线二（PyTorch 原生 / Hugging Face 派系）： FSDP 代替 ZeRO-3 + 取代 PP</h5><ul><li>**架构：**Fully Sharded Data Parallel (FSDP)。</li></ul><p>这一路线的核心逻辑是，既然ZeRO-3思想（参数全分片）单卡和多卡能省显存，那就<strong>彻底抛弃PP（流水线并行）</strong>。现代团队发现，用FSDP配合 <code>Activation Checkpointing</code>，在8卡或16卡环境里，可以轻松塞下70B甚至更大的模型进行全量微调，完全不需要开PP。因为 PP 带来了烦人的流水线气泡（Bubble）和通信等待，而纯FSDP的通信是可以和前向计算完美重叠（Overlap）的。这种组合更多被中型到小型的大模型训练团队采用为高度方便的训练方案。</p><h2 id=逸闻>逸闻</h2><p>这就是查询参考方案性能的时候查到的一件事情，前面也多多少少提了一句。其实，在Deepspeed的方案中，ZeRO-2和ZeRO-3与Pipeline Parallelism的实现是不兼容的！这是我好不容易把正确性调对、绞尽脑汁也没法解决ZeRO-3性能问题之后，迫于无奈尝试参考官方实现的时候震惊地得知的结果。</p><p>不过，实测下来，ZeRO-2+PP仍然是相对来说有实际意义的，测试的数据也支持这一个结论。换言之，我们的方案已经在feature上超过了Deepspeed（哈）。当然，这很大程度上是因为我们的框架本质上是一个个人项目框架，而不是需要处理所有边界情况的工业级项目；但即使如此，这也意味着我们的开发过程并不是毫无作用的。探索这些可行和不可行的边界，正是好的coding项目应该做的事情。如果读者对这部分感兴趣，源代码已经开源在仓库里，有兴趣的读者可以去阅读。</p><h2 id=总结>总结</h2><p>到这一步为止，我们已经完成了除了SFT训练支持之外的所有核心feature组件的实现。接下来是SFT，它的复杂度应该会比我们已经走过的路程低很多。后面的很多调度方案等等组件，也是在现有框架架构的基础上进行扩展，而不是进行颠覆式的重构和侵入式修改。无论如何，这已经是一个令人兴奋和欣慰的进展，而且Femtotron作为一个预训练框架已经来到了。集中开发的工作仍然在继续，可能会有一篇阶段式里程碑的博客，总结我们已经具有的feature情况。可能还有一篇专门用来做Profiling，为未来可能的参数调优做准备。whatever，道阻且长，慢慢做吧。</p></section><footer class="article-meta article-footer"><section class=article-tags><a href=/tags/megatron/>Megatron</a>
+<a href=/tags/%E8%AE%AD%E7%BB%83%E6%A1%86%E6%9E%B6/>训练框架</a>
+<a href=/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/>预训练</a></section></footer><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css integrity=sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV crossorigin=anonymous><script src=https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js integrity=sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8 crossorigin=anonymous defer></script><script src=https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js integrity=sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05 crossorigin=anonymous defer></script><script>window.addEventListener("DOMContentLoaded",()=>{const e=[".main-article",".widget--toc"];e.forEach(e=>{const t=document.querySelector(e);t&&renderMathInElement(t,{delimiters:[{left:"$$",right:"$$",display:!0},{left:"$",right:"$",display:!1},{left:"\\(",right:"\\)",display:!1},{left:"\\[",right:"\\]",display:!0}],ignoredClasses:["gist"]})})})</script></article><aside><h2 class=section-title>Related content</h2><div class=subsection-list><div class=article-list--tile><article><a href=/posts/20260514-sac/><div class=article-details><h2 class=article-title>Femtotron开发日志 #8 选择性激活检查点 Selective Activation Checkpointing</h2></div></a></article><article><a href=/posts/20260513-zero3/><div class=article-details><h2 class=article-title>Femtotron开发日志 #7 ZeRO-3模式：抽象设计、Bug排查和教训总结</h2></div></a></article><article><a href=/posts/20260511-zero1/><div class=article-details><h2 class=article-title>Femtotron开发日志 #6 ZeRO-1和ZeRO-2模式：抽象设计、工程实现和占位符</h2></div></a></article><article><a href=/posts/20260509-dataparallelism/><div class=article-details><h2 class=article-title>Femtotron开发日志 #5 数据并行 Data Parallelism</h2></div></a></article><article><a href=/posts/20260429-mixedprecision/><div class=article-details><h2 class=article-title>Femtotron开发日志 #4 混合精度训练</h2></div></a></article></div></div></aside><div class=disqus-container></div><style>.disqus-container{background-color:var(--card-background);border-radius:var(--card-border-radius);box-shadow:var(--shadow-l1);padding:var(--card-padding)}</style><script>window.addEventListener("onColorSchemeChange",e=>{typeof DISQUS=="object"&&DISQUS.reset({reload:!0})})</script><footer class=site-footer><section class=copyright>&copy;
+2026 Fain的Blog</section><section class=powerby>Built with <a href=https://gohugo.io/ target=_blank rel=noopener>Hugo</a><br>Theme <b><a href=https://github.com/CaiJimmy/hugo-theme-stack target=_blank rel=noopener data-version=4.0.0>Stack</a></b> designed by <a href=https://jimmycai.com target=_blank rel=noopener>Jimmy</a></section></footer><script type=module>
+    import gallery from '\/ts\/gallery.js';
+
+    const articleContent = document.querySelector('.article-content');
+    const shouldLoad = articleContent && (articleContent.querySelectorAll('figure').length > 0 || articleContent.querySelectorAll('img.gallery-image').length > 0);
+    
+    if (shouldLoad) {
+        gallery(articleContent);
+
+        const PhotoSwipeLightbox = (await import("https:\/\/cdn.jsdelivr.net\/npm\/photoswipe@5.4.4\/dist\/photoswipe-lightbox.esm.min.js")).default;
+        const styleHref = "https:\/\/cdn.jsdelivr.net\/npm\/photoswipe@5.4.4\/dist\/photoswipe.css";
+
+        const styleTag = document.createElement('link');
+        styleTag.rel = 'stylesheet';
+        styleTag.href = styleHref;
+        document.head.appendChild(styleTag);
+
+        const lightbox = new PhotoSwipeLightbox({
+            gallerySelector: '.article-content',
+            childSelector: 'figure a.image-link',
+            pswpModule: () => import("https:\/\/cdn.jsdelivr.net\/npm\/photoswipe@5.4.4\/dist\/photoswipe.esm.min.js")
+        });
+        lightbox.init();
+    }
+</script></main></div><script type=text/javascript src=/ts/main.acaf849f2b273f6a8368a58b001f336738d0c948d92e79b116467d0c7515f932.js defer></script></body></html>

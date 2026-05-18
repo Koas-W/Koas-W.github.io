@@ -1,0 +1,4 @@
+[ZoneTransfer]
+ZoneId=3
+ReferrerUrl=https://claude.ai/chat/c4452b00-11aa-4e72-ba89-cf9e5990e872
+HostUrl=https://claude.ai/api/organizations/737e2557-28bd-4b98-b5cb-de1b20eff1af/conversations/c4452b00-11aa-4e72-ba89-cf9e5990e872/wiggle/download-file?path=%2Fmnt%2Fuser-data%2Foutputs%2Fpipeline_parallelism.md

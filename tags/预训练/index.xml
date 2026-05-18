@@ -1,17 +1,878 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>预训练 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/</link><description>Recent content in 预训练 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Sun, 17 May 2026 23:26:30 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #9 流水线并行 Pipeline Parallelism</title><link>https://Koas-W.github.io/posts/20260517pipelineparallel/</link><pubDate>Sun, 17 May 2026 23:26:30 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260517pipelineparallel/</guid><description>&lt;p&gt;这几天的工作量是实现了3P并行当中的最后一环：流水线并行，Pipeline Parallelism。这个并行理论上在Pico-vLLM的推理场景当中也同样有意义，但却碍于工程量问题未能真实实现，因此在Femtotron中对它进行真正的实现也算是弥补了遗憾。这次的博客更新之所以隔了这么多天，是因为这个并行的工程量意外的大，而且和之前的ZeRO系列一样，具有极多麻烦的边界情况问题。下面讲一讲原理、核心的设计抽象，以及中途遇到的值得一提的问题，以供后来人和读者参考，希望有所帮助。&lt;/p&gt;
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>预训练 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/</link><description>Recent content in 预训练 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Mon, 18 May 2026 15:00:29 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #10 ZeRO-3、SAC和PP：一个简单的显存节省收益数据测试和分析</title><link>https://Koas-W.github.io/posts/20260518-analysisofzerosacpp/</link><pubDate>Mon, 18 May 2026 15:00:29 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260518-analysisofzerosacpp/</guid><description>&lt;p&gt;这里列几组数据，和测试它们的时候使用的参数，供大家参考，并且提供一些分析。具体的内存占用太过复杂，因此分析可能有不完全详尽之处，能对读者有所启发即可。&lt;/p&gt;
+&lt;h2 id="数据"&gt;数据
+&lt;/h2&gt;&lt;h3 id="pp1tp1dp8-固定num_layers8-变化seq_len"&gt;PP=1、TP=1、DP=8 (固定num_layers=8, 变化seq_len)
+&lt;/h3&gt;&lt;p&gt;参数如下：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;13
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;model_config &lt;span style="color:#f92672"&gt;=&lt;/span&gt; AutoConfig&lt;span style="color:#f92672"&gt;.&lt;/span&gt;for_model(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;llama&amp;#34;&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; hidden_size&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1024&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; intermediate_size&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;2048&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_attention_heads&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;16&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_key_value_heads&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;4&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_hidden_layers&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;8&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; max_position_embeddings&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;128&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; vocab_size&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1024&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; rms_norm_eps&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1e-5&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; hidden_act&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;silu&amp;#34;&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; tie_word_embeddings&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#66d9ef"&gt;False&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;数据如下：&lt;/p&gt;
+&lt;table&gt;
+ &lt;thead&gt;
+ &lt;tr&gt;
+ &lt;th&gt;Config&lt;/th&gt;
+ &lt;th style="text-align: right"&gt;seq=16&lt;/th&gt;
+ &lt;th style="text-align: right"&gt;seq=32&lt;/th&gt;
+ &lt;th style="text-align: right"&gt;seq=1024&lt;/th&gt;
+ &lt;/tr&gt;
+ &lt;/thead&gt;
+ &lt;tbody&gt;
+ &lt;tr&gt;
+ &lt;td&gt;baseline&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;1653&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;1653&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;3631&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;baseline + AC&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;1653&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;1653&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;1669&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-1&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;460&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;471&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;2913&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-1 + AC&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;460&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;460&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;901&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-2&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;443&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;444&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;2776&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-2 + AC&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;443&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;444&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;765&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-3&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;384&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;419&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;2840&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-3 + AC&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;261&lt;/strong&gt;&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;261&lt;/strong&gt;&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;711&lt;/strong&gt;&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;/tbody&gt;
+&lt;/table&gt;
+&lt;h3 id="pp2tp2dp2-固定seq32变化num_layers"&gt;PP=2、TP=2、DP=2 (固定seq=32,变化num_layers)
+&lt;/h3&gt;&lt;p&gt;参数如下：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;13
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;model_config &lt;span style="color:#f92672"&gt;=&lt;/span&gt; AutoConfig&lt;span style="color:#f92672"&gt;.&lt;/span&gt;for_model(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;llama&amp;#34;&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; hidden_size&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;2048&lt;/span&gt;, 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; intermediate_size&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;8192&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_attention_heads&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;32&lt;/span&gt;, 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_key_value_heads&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;8&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_hidden_layers&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;8&lt;/span&gt;, 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; max_position_embeddings&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;128&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; vocab_size&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;40960&lt;/span&gt;, 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; rms_norm_eps&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1e-5&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; hidden_act&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;silu&amp;#34;&lt;/span&gt;, 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; tie_word_embeddings&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#66d9ef"&gt;False&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;数据如下：&lt;/p&gt;
+&lt;table&gt;
+ &lt;thead&gt;
+ &lt;tr&gt;
+ &lt;th&gt;Config&lt;/th&gt;
+ &lt;th style="text-align: right"&gt;N=8(4/stage)&lt;/th&gt;
+ &lt;th style="text-align: right"&gt;N=32(16/stage)&lt;/th&gt;
+ &lt;th style="text-align: right"&gt;N=64(32/stage)&lt;/th&gt;
+ &lt;/tr&gt;
+ &lt;/thead&gt;
+ &lt;tbody&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-0&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;3601&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;12558&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;24404&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-0 + AC&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;3601&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;11954&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;23091&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-1&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;2136&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;9534&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;18595&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-1 + AC&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;2136&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;6993&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;13490&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-2&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;2044&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;9030&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;17627&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-2 + AC&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;2044&lt;/strong&gt;&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;6569&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;12602&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-3&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;2233&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;10808&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;20829&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;ZeRO-3 + AC&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;2216&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;6417&lt;/strong&gt;&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;12018&lt;/strong&gt;&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;/tbody&gt;
+&lt;/table&gt;
+&lt;h3 id="zero-3-vs-zero-2--sac-对比"&gt;ZeRO-3 vs ZeRO-2 + SAC 对比
+&lt;/h3&gt;&lt;table&gt;
+ &lt;thead&gt;
+ &lt;tr&gt;
+ &lt;th&gt;设置&lt;/th&gt;
+ &lt;th style="text-align: right"&gt;ZeRO-2 + AC&lt;/th&gt;
+ &lt;th style="text-align: right"&gt;ZeRO-3 + AC&lt;/th&gt;
+ &lt;th style="text-align: right"&gt;Δ(负 = ZeRO-3 赢)&lt;/th&gt;
+ &lt;/tr&gt;
+ &lt;/thead&gt;
+ &lt;tbody&gt;
+ &lt;tr&gt;
+ &lt;td&gt;&lt;strong&gt;PP=1&lt;/strong&gt;, seq=16, N=8&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;443&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;261&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;−182&lt;/strong&gt;&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;&lt;strong&gt;PP=1&lt;/strong&gt;, seq=32, N=8&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;444&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;261&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;−183&lt;/strong&gt;&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;&lt;strong&gt;PP=1&lt;/strong&gt;, seq=1024, N=8&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;765&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;711&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;−54&lt;/strong&gt;&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;&lt;strong&gt;PP=2&lt;/strong&gt;, seq=32, N=8(4/stage)&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;2044&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;2216&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;+172&lt;/strong&gt; ✗&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;&lt;strong&gt;PP=2&lt;/strong&gt;, seq=32, N=32(16/stage)&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;6569&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;6417&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;−152&lt;/strong&gt;&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;&lt;strong&gt;PP=2&lt;/strong&gt;, seq=32, N=64(32/stage)&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;12602&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;12018&lt;/td&gt;
+ &lt;td style="text-align: right"&gt;&lt;strong&gt;−584&lt;/strong&gt;&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;/tbody&gt;
+&lt;/table&gt;
+&lt;h2 id="分析"&gt;分析
+&lt;/h2&gt;&lt;p&gt;从上面的数据可以得出几个浅显的结论：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;1、在DP规模相对较大、TP和PP都不存在的时候，ZeRO-3的优势很明显。&lt;/li&gt;
+&lt;li&gt;2、在使用PP并行和DP规模相对较小的时候，ZeRO-3的优势几乎不再明显存在，甚至可能有反转的情况。&lt;/li&gt;
+&lt;li&gt;3、在seq_len较大的时候，ZeRO-3的显存节省会被削弱甚至被ZeRO-2反转，但配合SAC可以弥补这部分额外损失，恢复明显的优势。&lt;/li&gt;
+&lt;li&gt;4、在模型单层参数增多的时候，ZeRO-3 + SAC的优势更加微弱。在模型的单层参数不变，但是层数变深的时候，ZeRO-3 + SAC的优势更加明显。&lt;/li&gt;
+&lt;li&gt;5、ZeRO-1和ZeRO-2在各种情况下基本可以提供稳定的性能优化。&lt;/li&gt;
+&lt;li&gt;6、SAC单独使用的时候，其效果取决于seq_len等输入规模参数的大小。如果这些参数不够大，SAC可能完全没有效果。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;它的根源在于ZeRO-3 + SAC的显存节省来源，和改变模型参数、改变并行配置的时候ZeRO-3 + SAC的额外显存增加来源并不相同。ZeRO-3是否真的能取得收益，取决于这样两个数值的此消彼长：&lt;strong&gt;ZeRO-3必须保持活跃的&amp;quot;瞬时块&amp;quot;大小&lt;/strong&gt;，和&lt;strong&gt;ZeRO-3总共节省下来的内存大小&lt;/strong&gt;。前者大，那么ZeRO-3会输给ZeRO-2，反之则超过。节省下来的内存大小理论上相对来说很好计算，就是权重中被shard掉的比例，而必须保持活跃的&amp;quot;瞬时块&amp;quot;大小则和很多因素有关系。目前能够明显观察到的有：1、PP stage的流水线拖延导致的缓冲区分配；2、seq_len拉大导致的缓冲区分配；3、单个layer的unshard过程造成的临时峰值。当然，这些分析是很粗浅的，不过基本已经足以指导我们对这些优化策略的使用与否。我非常相信这当中还有更深的奥妙有待研究，这就交给有兴趣的人进行进一步的分析了。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #9 流水线并行 Pipeline Parallelism</title><link>https://Koas-W.github.io/posts/20260517-pipelineparallel/</link><pubDate>Sun, 17 May 2026 23:26:30 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260517-pipelineparallel/</guid><description>&lt;p&gt;这几天的工作量是实现了3P并行当中的最后一环：流水线并行，Pipeline Parallelism。这个并行理论上在Pico-vLLM的推理场景当中也同样有意义，但却碍于工程量问题未能真实实现，因此在Femtotron中对它进行真正的实现也算是弥补了遗憾。这次的博客更新之所以隔了这么多天，是因为这个并行的工程量意外的大，而且和之前的ZeRO系列一样，具有极多麻烦的边界情况问题。下面讲一讲原理、核心的设计抽象，以及中途遇到的值得一提的问题，以供后来人和读者参考，希望有所帮助。&lt;/p&gt;
 &lt;h2 id="流水线并行的原理"&gt;流水线并行的原理
-&lt;/h2&gt;&lt;p&gt;应该没有人不能理解PP的原理是什么。它在概念上极其简单：在tokenizer-若干个layer-lm head这个前向传播的维度上，按某种原则进行切分，将切分的结果。&lt;/p&gt;
+&lt;/h2&gt;&lt;p&gt;应该没有人不能理解PP的原理是什么。它在概念上极其简单：在tokenizer-若干个layer-lm head这个前向传播的维度上，按某种原则进行切分，将切分的结果依次分配到不同的GPU上，并且在它们之间协调一组调度和通信内容、顺序的过程。直观上，就是把模型按纵向维度切分，一段段的放在GPU的rank0,1,2...上，依次往前做，反向传播的时候再反过来。&lt;/p&gt;
 &lt;p&gt;问题是它的实现同样很麻烦。下面会详细讲讲这些问题。&lt;/p&gt;
 &lt;h2 id="流水线并行的核心设计架构和抽象"&gt;流水线并行的核心设计架构和抽象
-&lt;/h2&gt;&lt;p&gt;🚧🚧🚧施工中🚧🚧🚧&lt;/p&gt;
-&lt;h2 id="值得注意的bug"&gt;值得注意的Bug
-&lt;/h2&gt;&lt;p&gt;🚧🚧🚧施工中🚧🚧🚧&lt;/p&gt;
-&lt;h2 id="zero-3--pp时会发生的死亡显存占用和计算效率问题"&gt;ZeRO-3 + PP时会发生的死亡显存占用和计算效率问题
+&lt;/h2&gt;&lt;p&gt;流水线并行的核心问题在于处理不同stage之间的次要异质性。对于中间阶段，无论如何，输入和输出都是一样的，完全同质化。然而，对于第一个stage和最后一个stage就不一样了。对于第一个stage来说，其输入不是Hidden state而是word Embedding的向量；对于最后一个stage来说区分更明显，要多做一个lm head，而且随着场景变化可能要物化一个巨大的vocab table，导致额外的计算量和内存峰值。在主流实践当中，如果有此类需求，我们通常会微调layer数量的分配，在最后一个stage上有意减少普通layer的数量，以达到更好的负载均衡。我们的框架为此专门实现了可调节每个stage layer数量的可配置方案；不过为了使用方便起见，我们大多数时候会采用默认的均匀配置。&lt;/p&gt;
+&lt;h3 id="流水线模型模块"&gt;流水线模型模块
+&lt;/h3&gt;&lt;p&gt;和前面的惯用伎俩一样，就是用一个warpper把切分的layer们包裹起来，异质性的复杂度也在这一层处理。首先是warpper内部包裹的东西：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 13
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 14
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 15
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 16
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 17
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 18
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 19
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 20
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 21
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 22
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 23
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 24
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 25
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 26
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 27
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 28
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 29
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 30
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 31
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 32
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 33
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 34
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 35
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 36
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 37
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 38
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 39
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 40
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 41
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 42
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 43
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 44
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 45
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 46
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 47
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 48
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 49
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 50
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 51
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 52
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 53
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 54
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 55
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 56
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 57
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 58
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 59
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 60
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 61
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 62
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 63
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 64
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 65
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 66
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 67
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 68
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 69
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 70
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 71
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 72
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 73
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 74
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 75
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 76
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 77
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 78
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 79
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 80
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 81
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 82
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 83
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 84
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 85
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 86
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 87
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 88
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 89
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 90
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 91
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 92
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 93
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 94
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 95
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 96
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 97
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 98
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 99
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;100
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;101
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;102
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;103
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;104
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;105
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;106
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;107
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;108
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;109
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;110
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;111
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;112
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;113
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;114
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;115
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;116
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;117
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;118
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;119
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;class&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;LlamaPartialModel&lt;/span&gt;(nn&lt;span style="color:#f92672"&gt;.&lt;/span&gt;Module):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;__init__&lt;/span&gt;(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; model_config: LlamaConfig,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; parallel_ctx: ParallelContext,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; layer_range: range &lt;span style="color:#f92672"&gt;|&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt; &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; is_first: bool &lt;span style="color:#f92672"&gt;|&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt; &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; is_last: bool &lt;span style="color:#f92672"&gt;|&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt; &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;, &lt;span style="color:#75715e"&gt;# None = 从 layer_range 自动推导&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; ):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;&amp;#34;&amp;#34;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; Args:
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; model_config: HF LlamaConfig
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; parallel_ctx: 并行上下文。目前仅存储,未在 forward 中使用;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; 预留给未来需要 PP/TP-aware 行为的扩展
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; layer_range: 本 stage 持有的 layer indices(全局编号,
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; 就是 LlamaDecoderLayer.layer_idx 的值)。
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; None 表示持有全部 layers
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; is_first: 是否第一个 stage(持有 embed_tokens)
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; is_last: 是否最后一个 stage(持有 final norm)
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; Raises:
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; ValueError: layer_range 越界,或 layer_range 不是 range 类型
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; &amp;#34;&amp;#34;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; super()&lt;span style="color:#f92672"&gt;.&lt;/span&gt;&lt;span style="color:#a6e22e"&gt;__init__&lt;/span&gt;()
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; is_first &lt;span style="color:#f92672"&gt;is&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; is_first &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (layer_range&lt;span style="color:#f92672"&gt;.&lt;/span&gt;start &lt;span style="color:#f92672"&gt;==&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; is_last &lt;span style="color:#f92672"&gt;is&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; is_last &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (layer_range&lt;span style="color:#f92672"&gt;.&lt;/span&gt;stop &lt;span style="color:#f92672"&gt;==&lt;/span&gt; model_config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;num_hidden_layers)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; getattr(model_config, &lt;span style="color:#e6db74"&gt;&amp;#34;attn_implementation&amp;#34;&lt;/span&gt;, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;) &lt;span style="color:#f92672"&gt;is&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; impl &lt;span style="color:#f92672"&gt;=&lt;/span&gt; getattr(model_config, &lt;span style="color:#e6db74"&gt;&amp;#34;attn_implementation&amp;#34;&lt;/span&gt;, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;) &lt;span style="color:#f92672"&gt;or&lt;/span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;sdpa&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; model_config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;_attn_implementation &lt;span style="color:#f92672"&gt;=&lt;/span&gt; impl
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;config &lt;span style="color:#f92672"&gt;=&lt;/span&gt; model_config
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;parallel_ctx &lt;span style="color:#f92672"&gt;=&lt;/span&gt; parallel_ctx
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;layer_range &lt;span style="color:#f92672"&gt;=&lt;/span&gt; layer_range
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;is_first &lt;span style="color:#f92672"&gt;=&lt;/span&gt; is_first
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;is_last &lt;span style="color:#f92672"&gt;=&lt;/span&gt; is_last
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# First stage: embed_tokens&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; is_first:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;embed_tokens &lt;span style="color:#f92672"&gt;=&lt;/span&gt; nn&lt;span style="color:#f92672"&gt;.&lt;/span&gt;Embedding(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; model_config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;vocab_size,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; model_config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;hidden_size,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; padding_idx&lt;span style="color:#f92672"&gt;=&lt;/span&gt;model_config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;pad_token_id,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;layers &lt;span style="color:#f92672"&gt;=&lt;/span&gt; nn&lt;span style="color:#f92672"&gt;.&lt;/span&gt;ModuleDict({
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; str(idx): LlamaDecoderLayer(model_config, layer_idx&lt;span style="color:#f92672"&gt;=&lt;/span&gt;idx)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; idx &lt;span style="color:#f92672"&gt;in&lt;/span&gt; layer_range
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; })
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;rotary_emb &lt;span style="color:#f92672"&gt;=&lt;/span&gt; LlamaRotaryEmbedding(config&lt;span style="color:#f92672"&gt;=&lt;/span&gt;model_config)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# Last stage: final RMSNorm&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; is_last:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;norm &lt;span style="color:#f92672"&gt;=&lt;/span&gt; LlamaRMSNorm(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; model_config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;hidden_size,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; eps&lt;span style="color:#f92672"&gt;=&lt;/span&gt;model_config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;rms_norm_eps,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;forward&lt;/span&gt;(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; x: torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;Tensor,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; attention_mask: torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;Tensor &lt;span style="color:#f92672"&gt;|&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt; &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; position_ids: torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;Tensor &lt;span style="color:#f92672"&gt;|&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt; &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; ) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;Tensor:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;&amp;#34;&amp;#34;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; Args:
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; x:
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; - is_first=True: input_ids,LongTensor[B, S]
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; - is_first=False: hidden_states,float[B, S, H]
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; attention_mask: 默认 None
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; position_ids: 默认 None
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; Returns:
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; hidden_states float[B, S, H]
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; - 非 last stage: layers 输出(未经 final norm)
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; - last stage: 经过 final norm 的 hidden_states
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#e6db74"&gt; &amp;#34;&amp;#34;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# Embed (first stage only)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;is_first:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; hidden_states &lt;span style="color:#f92672"&gt;=&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;embed_tokens(x)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;else&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; hidden_states &lt;span style="color:#f92672"&gt;=&lt;/span&gt; x
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; bsz, seqlen, _ &lt;span style="color:#f92672"&gt;=&lt;/span&gt; hidden_states&lt;span style="color:#f92672"&gt;.&lt;/span&gt;shape
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; position_ids &lt;span style="color:#f92672"&gt;is&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; position_ids &lt;span style="color:#f92672"&gt;=&lt;/span&gt; torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; seqlen, device&lt;span style="color:#f92672"&gt;=&lt;/span&gt;hidden_states&lt;span style="color:#f92672"&gt;.&lt;/span&gt;device, dtype&lt;span style="color:#f92672"&gt;=&lt;/span&gt;torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;long,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )&lt;span style="color:#f92672"&gt;.&lt;/span&gt;unsqueeze(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;from&lt;/span&gt; transformers.masking_utils &lt;span style="color:#f92672"&gt;import&lt;/span&gt; create_causal_mask
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; causal_mask &lt;span style="color:#f92672"&gt;=&lt;/span&gt; create_causal_mask(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; config&lt;span style="color:#f92672"&gt;=&lt;/span&gt;self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;config,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; inputs_embeds&lt;span style="color:#f92672"&gt;=&lt;/span&gt;hidden_states,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; attention_mask&lt;span style="color:#f92672"&gt;=&lt;/span&gt;attention_mask,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; past_key_values&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; position_ids&lt;span style="color:#f92672"&gt;=&lt;/span&gt;position_ids,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; position_embeddings &lt;span style="color:#f92672"&gt;=&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;rotary_emb(hidden_states, position_ids&lt;span style="color:#f92672"&gt;=&lt;/span&gt;position_ids)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; layer &lt;span style="color:#f92672"&gt;in&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;layers&lt;span style="color:#f92672"&gt;.&lt;/span&gt;values():
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; hidden_states &lt;span style="color:#f92672"&gt;=&lt;/span&gt; layer(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; hidden_states,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; attention_mask&lt;span style="color:#f92672"&gt;=&lt;/span&gt;causal_mask,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; position_embeddings&lt;span style="color:#f92672"&gt;=&lt;/span&gt;position_embeddings,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; position_ids&lt;span style="color:#f92672"&gt;=&lt;/span&gt;position_ids,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; past_key_values&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; use_cache&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#66d9ef"&gt;False&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;is_last:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; hidden_states &lt;span style="color:#f92672"&gt;=&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;norm(hidden_states)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; hidden_states
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;然后是warpper本身：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;13
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;14
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;15
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;16
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;17
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;18
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;19
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;20
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;21
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;22
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;23
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;24
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;25
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;26
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;27
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;28
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;29
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;30
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;class&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;LlamaForCausalLM&lt;/span&gt;(BaseCausalLMPipeline):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;__init__&lt;/span&gt;(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; config: LlamaConfig,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; parallel_ctx: ParallelContext,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; layer_range: range &lt;span style="color:#f92672"&gt;|&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt; &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; ):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; super()&lt;span style="color:#f92672"&gt;.&lt;/span&gt;&lt;span style="color:#a6e22e"&gt;__init__&lt;/span&gt;()
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;config &lt;span style="color:#f92672"&gt;=&lt;/span&gt; config
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;hidden_size &lt;span style="color:#f92672"&gt;=&lt;/span&gt; config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;hidden_size
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;model &lt;span style="color:#f92672"&gt;=&lt;/span&gt; LlamaPartialModel(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; model_config&lt;span style="color:#f92672"&gt;=&lt;/span&gt;config,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; parallel_ctx&lt;span style="color:#f92672"&gt;=&lt;/span&gt;parallel_ctx,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; layer_range&lt;span style="color:#f92672"&gt;=&lt;/span&gt;layer_range,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;is_first &lt;span style="color:#f92672"&gt;=&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;model&lt;span style="color:#f92672"&gt;.&lt;/span&gt;is_first
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;is_last &lt;span style="color:#f92672"&gt;=&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;model&lt;span style="color:#f92672"&gt;.&lt;/span&gt;is_last
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;is_last:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;lm_head &lt;span style="color:#f92672"&gt;=&lt;/span&gt; nn&lt;span style="color:#f92672"&gt;.&lt;/span&gt;Linear(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;hidden_size, config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;vocab_size, bias&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#66d9ef"&gt;False&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# 暂时不支持tie_word_embeddings&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;tie_word_embeddings:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;raise&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;NotImplementedError&lt;/span&gt;(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#e6db74"&gt;&amp;#34;LlamaForCausalLM 目前不支持 tie_word_embeddings=True&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;可以看到，实现本身还是比较直白简洁的。复杂性和前面遇到的各类杂七杂八问题一样：还是在边界情况里。&lt;/p&gt;
+&lt;h3 id="调度模块"&gt;调度模块
+&lt;/h3&gt;&lt;p&gt;流水线并行和调度必须一起做，缺一不可。这里我们实现了baseline的all then all调度（先全部前向传播，然后再全部反向传播）作为基线，然后实现了基础的1F1B调度（通过交错排列前向传播和反向传播来降低空泡率）。未来可能还会增加更多的调度策略，这也是在规划内的。它们的原理在开源资料里已经得到了很详细的普及了，因此这里不详细展开。它们的代码如下：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;13
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;14
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;15
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;16
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;17
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;18
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;19
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;20
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;21
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;22
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;23
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;24
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;25
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;26
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;27
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;28
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;29
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;gpipe_schedule&lt;/span&gt;(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_microbatches: int,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; is_first: bool,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; is_last: bool,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; list[PPAction]:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; num_microbatches &lt;span style="color:#f92672"&gt;&amp;lt;&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;raise&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;ValueError&lt;/span&gt;(&lt;span style="color:#e6db74"&gt;f&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;num_microbatches must be &amp;gt;= 1, got &lt;/span&gt;&lt;span style="color:#e6db74"&gt;{&lt;/span&gt;num_microbatches&lt;span style="color:#e6db74"&gt;}&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions: list[PPAction] &lt;span style="color:#f92672"&gt;=&lt;/span&gt; []
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# ── Forward phase: mb 0, 1, ..., N-1 ──&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; mb &lt;span style="color:#f92672"&gt;in&lt;/span&gt; range(num_microbatches):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; is_first:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(RecvForward(mb)) &lt;span style="color:#75715e"&gt;# recv hidden from prev stage&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(Forward(mb)) &lt;span style="color:#75715e"&gt;# forward through model&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; is_last:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(SendForward(mb)) &lt;span style="color:#75715e"&gt;# send hidden to next stage&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# ── Backward phase: mb N-1, N-2, ..., 0 ──&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# Reversed order matches LIFO of the autograd graph each mb&amp;#39;s activations&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# are released after its backward, allowing early memory reuse.&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; mb &lt;span style="color:#f92672"&gt;in&lt;/span&gt; reversed(range(num_microbatches)):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; is_last:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(RecvBackward(mb)) &lt;span style="color:#75715e"&gt;# recv grad_output from next stage&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(Backward(mb)) &lt;span style="color:#75715e"&gt;# backward, accumulate param grads&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; is_first:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(SendBackward(mb)) &lt;span style="color:#75715e"&gt;# send grad_input to prev stage&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; actions
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;13
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;14
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;15
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;16
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;17
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;18
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;19
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;20
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;21
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;22
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;23
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;24
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;25
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;26
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;27
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;28
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;29
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;30
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;31
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;32
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;33
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;34
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;35
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;36
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;37
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;38
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;39
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;40
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;41
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;42
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;43
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;44
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;45
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;46
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;47
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;48
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;49
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;50
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;51
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;52
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;53
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;54
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;55
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;56
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;57
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;58
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;59
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;60
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;61
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;62
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;63
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;64
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;65
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;66
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;67
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;68
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;69
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;70
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;71
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;72
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;73
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;one_f_one_b_schedule&lt;/span&gt;(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_microbatches: int,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pp_size: int,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pp_rank: int,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;) &lt;span style="color:#f92672"&gt;-&amp;gt;&lt;/span&gt; list[PPAction]:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; num_microbatches &lt;span style="color:#f92672"&gt;&amp;lt;&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;raise&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;ValueError&lt;/span&gt;(&lt;span style="color:#e6db74"&gt;f&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;num_microbatches must be &amp;gt;= 1, got &lt;/span&gt;&lt;span style="color:#e6db74"&gt;{&lt;/span&gt;num_microbatches&lt;span style="color:#e6db74"&gt;}&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; pp_size &lt;span style="color:#f92672"&gt;&amp;lt;&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;raise&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;ValueError&lt;/span&gt;(&lt;span style="color:#e6db74"&gt;f&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;pp_size must be &amp;gt;= 1, got &lt;/span&gt;&lt;span style="color:#e6db74"&gt;{&lt;/span&gt;pp_size&lt;span style="color:#e6db74"&gt;}&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; pp_rank &lt;span style="color:#f92672"&gt;&amp;lt;&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt; &lt;span style="color:#f92672"&gt;or&lt;/span&gt; pp_rank &lt;span style="color:#f92672"&gt;&amp;gt;=&lt;/span&gt; pp_size:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;raise&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;ValueError&lt;/span&gt;(&lt;span style="color:#e6db74"&gt;f&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;pp_rank must be in [0, &lt;/span&gt;&lt;span style="color:#e6db74"&gt;{&lt;/span&gt;pp_size&lt;span style="color:#e6db74"&gt;}&lt;/span&gt;&lt;span style="color:#e6db74"&gt;), got &lt;/span&gt;&lt;span style="color:#e6db74"&gt;{&lt;/span&gt;pp_rank&lt;span style="color:#e6db74"&gt;}&lt;/span&gt;&lt;span style="color:#e6db74"&gt;&amp;#34;&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; is_first &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (pp_rank &lt;span style="color:#f92672"&gt;==&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; is_last &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (pp_rank &lt;span style="color:#f92672"&gt;==&lt;/span&gt; pp_size &lt;span style="color:#f92672"&gt;-&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_warmup &lt;span style="color:#f92672"&gt;=&lt;/span&gt; min(pp_size &lt;span style="color:#f92672"&gt;-&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt; &lt;span style="color:#f92672"&gt;-&lt;/span&gt; pp_rank, num_microbatches)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_steady &lt;span style="color:#f92672"&gt;=&lt;/span&gt; num_microbatches &lt;span style="color:#f92672"&gt;-&lt;/span&gt; num_warmup
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; num_cooldown &lt;span style="color:#f92672"&gt;=&lt;/span&gt; num_warmup &lt;span style="color:#75715e"&gt;# by symmetry&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions: list[PPAction] &lt;span style="color:#f92672"&gt;=&lt;/span&gt; []
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# ── Phase 1: Warm-up forwards (fill the pipeline) ──&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; j &lt;span style="color:#f92672"&gt;in&lt;/span&gt; range(num_warmup):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; is_first:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(RecvForward(mb_id&lt;span style="color:#f92672"&gt;=&lt;/span&gt;j))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(Forward(mb_id&lt;span style="color:#f92672"&gt;=&lt;/span&gt;j))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; is_last:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(SendForward(mb_id&lt;span style="color:#f92672"&gt;=&lt;/span&gt;j))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# ── Phase 2: Steady-state 1F1B ──&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; k &lt;span style="color:#f92672"&gt;in&lt;/span&gt; range(num_steady):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; fwd_mb &lt;span style="color:#f92672"&gt;=&lt;/span&gt; num_warmup &lt;span style="color:#f92672"&gt;+&lt;/span&gt; k
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; bwd_mb &lt;span style="color:#f92672"&gt;=&lt;/span&gt; k
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; is_first_steady &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (k &lt;span style="color:#f92672"&gt;==&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; is_last_steady &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (k &lt;span style="color:#f92672"&gt;==&lt;/span&gt; num_steady &lt;span style="color:#f92672"&gt;-&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# F(fwd_mb): need its input&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# - first_steady &amp;amp; not is_first: warmup did RF(0..warmup-1),&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# so explicit RF(fwd_mb) here&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# - subsequent: input arrived via prev iter&amp;#39;s SBRF&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# - is_first: input from caller dict, no recv ever needed&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; is_first_steady &lt;span style="color:#f92672"&gt;and&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; is_first:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(RecvForward(mb_id&lt;span style="color:#f92672"&gt;=&lt;/span&gt;fwd_mb))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(Forward(mb_id&lt;span style="color:#f92672"&gt;=&lt;/span&gt;fwd_mb))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# Send F output forward + recv B grad backward (combined to avoid deadlock)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; is_last:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(SendForwardRecvBackward(fwd_mb&lt;span style="color:#f92672"&gt;=&lt;/span&gt;fwd_mb, bwd_mb&lt;span style="color:#f92672"&gt;=&lt;/span&gt;bwd_mb))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# else: last stage — no SF, no RB (loss provides grad locally)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(Backward(mb_id&lt;span style="color:#f92672"&gt;=&lt;/span&gt;bwd_mb))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# Send B grad backward + recv next F input (combined; or plain SB at end)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; is_first:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; is_last_steady:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# No more F to recv (cooldown only does B&amp;#39;s)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(SendBackward(mb_id&lt;span style="color:#f92672"&gt;=&lt;/span&gt;bwd_mb))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;else&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(SendBackwardRecvForward(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; bwd_mb&lt;span style="color:#f92672"&gt;=&lt;/span&gt;bwd_mb, fwd_mb&lt;span style="color:#f92672"&gt;=&lt;/span&gt;fwd_mb &lt;span style="color:#f92672"&gt;+&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; ))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# else: first stage — no SB, no need for RF (input always from caller)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# ── Phase 3: Cool-down backwards (drain the pipeline) ──&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; j &lt;span style="color:#f92672"&gt;in&lt;/span&gt; range(num_cooldown):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; bwd_mb &lt;span style="color:#f92672"&gt;=&lt;/span&gt; num_steady &lt;span style="color:#f92672"&gt;+&lt;/span&gt; j
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; is_last:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(RecvBackward(mb_id&lt;span style="color:#f92672"&gt;=&lt;/span&gt;bwd_mb))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(Backward(mb_id&lt;span style="color:#f92672"&gt;=&lt;/span&gt;bwd_mb))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; &lt;span style="color:#f92672"&gt;not&lt;/span&gt; is_first:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; actions&lt;span style="color:#f92672"&gt;.&lt;/span&gt;append(SendBackward(mb_id&lt;span style="color:#f92672"&gt;=&lt;/span&gt;bwd_mb))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; actions
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;h2 id="值得注意的bug"&gt;值得注意的Bug
+&lt;/h2&gt;&lt;h3 id="rotary-inv_freq的garbage初始化问题"&gt;Rotary inv_freq的garbage初始化问题
+&lt;/h3&gt;&lt;p&gt;&lt;code&gt;meta → to_empty(device)&lt;/code&gt; 路径下,&lt;code&gt;persistent=False&lt;/code&gt; 的buffer不会被初始化,留下未定义内存。Llama 的 rotary embedding 的&lt;code&gt;inv_freq&lt;/code&gt; 就是这种buffer。&lt;/p&gt;
+&lt;p&gt;这导致模型forward出来的结果是garbage logits。关键是，由于它对于整个模型的精度影响平均下来也就~100到300个ULP上下，差点又一次没有发现，幸好仔细的人工校对了一遍。具体来说，是在Debug的时候，发现两个 rank 上的 &lt;code&gt;model.model.rotary_emb.inv_freq&lt;/code&gt; 值不一样（随机初始化导致的垃圾值不相同），从而发现了问题。&lt;/p&gt;
+&lt;p&gt;解决方案是加了一个 &lt;code&gt;_reset_rotary_inv_freq(rotary_emb, config, device)&lt;/code&gt; helper，在 test / random-init 路径下显式重算。生产路径下的 &lt;code&gt;ModelLoader&lt;/code&gt; 已经遇到过一次这个问题并且解决过一遍，这次算是踩了重复的坑，这下记的更牢了。实际上，模型的莫名其妙的问题，以到现在的经验来看，几乎总是和buffer、cache，这些不属于模型参数但是又需要持久化的东西有关，也许确实是一个值得思考的整体模式问题。&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;8
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;_reset_rotary_inv_freq&lt;/span&gt;(rotary_emb, config, device):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; base &lt;span style="color:#f92672"&gt;=&lt;/span&gt; getattr(config, &lt;span style="color:#e6db74"&gt;&amp;#34;rope_theta&amp;#34;&lt;/span&gt;, &lt;span style="color:#ae81ff"&gt;10000.0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; dim &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (getattr(config, &lt;span style="color:#e6db74"&gt;&amp;#34;head_dim&amp;#34;&lt;/span&gt;, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;) &lt;span style="color:#f92672"&gt;or&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; (config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;hidden_size &lt;span style="color:#f92672"&gt;//&lt;/span&gt; config&lt;span style="color:#f92672"&gt;.&lt;/span&gt;num_attention_heads))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; inv_freq &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1.0&lt;/span&gt; &lt;span style="color:#f92672"&gt;/&lt;/span&gt; (base &lt;span style="color:#f92672"&gt;**&lt;/span&gt; (
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, dim, &lt;span style="color:#ae81ff"&gt;2&lt;/span&gt;, dtype&lt;span style="color:#f92672"&gt;=&lt;/span&gt;torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;int64)&lt;span style="color:#f92672"&gt;.&lt;/span&gt;to(device, torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;float) &lt;span style="color:#f92672"&gt;/&lt;/span&gt; dim
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; ))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; rotary_emb&lt;span style="color:#f92672"&gt;.&lt;/span&gt;inv_freq&lt;span style="color:#f92672"&gt;.&lt;/span&gt;copy_(inv_freq&lt;span style="color:#f92672"&gt;.&lt;/span&gt;to(rotary_emb&lt;span style="color:#f92672"&gt;.&lt;/span&gt;inv_freq&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dtype))
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;这个过程带给我们的教训是，任何用 &lt;code&gt;meta → to_empty&lt;/code&gt; 的路径都要审计buffer是否被显式初始化。这很难依赖某种自动化规则，只能靠coder本人的实践经验和敏感性。&lt;/p&gt;
+&lt;h3 id="一个不算bug的奇怪问题"&gt;一个不算bug的奇怪问题
+&lt;/h3&gt;&lt;p&gt;cuBLAS lazy context warning总是消除不掉。尝试了很多方法无果，遂放弃。先记录在这里，等到哪天遇到类似问题或者看到解决方案了，再来捣鼓它。&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;UserWarning: Attempting to run cuBLAS, but there was no current CUDA context!
+&lt;/code&gt;&lt;/pre&gt;&lt;h2 id="zero-3--pp时会发生的显存占用和计算效率问题"&gt;ZeRO-3 + PP时会发生的显存占用和计算效率问题
 &lt;/h2&gt;&lt;p&gt;虽然这听上去很奇怪，但这是真的。ZeRO-3 + PP加在一起不如两个都不加。在我的测试当中，ZeRO-3在很多情况下，不仅没有相对于ZeRO-2降低显存的占用，反而增加了其占用情况。在PP=1的情况下，这种情况尚且并不多见；在PP=2及以上，即采用PP并行的情况下，它几乎&lt;strong&gt;总是&lt;/strong&gt;比ZeRO-2还要差。是SAC也拯救不了的那种，纯粹的占用了更多无法被释放的显存。&lt;/p&gt;
 &lt;p&gt;经过分析和多个配置参数的验证，这确实不是一个正确性问题，而是无法避免的机制冲突。也就是说：ZeRO-3 + PP是&lt;strong&gt;根本上不兼容&lt;/strong&gt;的两个训练优化/并行化机制。个人认为这是一个挺反直觉（至少不能第一时间通过纸面理论察觉到）的结果，而且某种程度上令人感到沮丧：因为ZeRO-3本身的复杂度就奇高无比，而且我自己实现的时候也花了很多心血，但现在却发现它作为增量的收益远不如我们预期的多。不过无论如何，抛开这些投入成本不谈，我仍然查询了学界和工业界对此的理解和处理，并且确实得到了很多有意思的信息和结论、方案。下面讲讲我了解到的相关原理、机制解释，以及学术界、工业界对它们的处理方法。&lt;/p&gt;
 &lt;h3 id="autograd-held-view现象"&gt;autograd-held view现象
-&lt;/h3&gt;&lt;p&gt;🚧🚧🚧施工中🚧🚧🚧&lt;/p&gt;
-&lt;h3 id="通信组communication-group划分导致显存反噬"&gt;通信组（Communication Group）划分导致显存反噬
+&lt;/h3&gt;&lt;p&gt;这是一个我发现了但是决定不解决的问题。它部分贡献了ZeRO-3在PP情况下的显存异常增加，但解决它可能造成潜在的破坏性影响。它的核心机制代码出现在ZeRO-3的unshard操作的下面这个地方：&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;7
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;unshard&lt;/span&gt;(self):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;_full_buffer &lt;span style="color:#f92672"&gt;=&lt;/span&gt; torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;empty(self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;padded_size, &lt;span style="color:#f92672"&gt;...&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; dist&lt;span style="color:#f92672"&gt;.&lt;/span&gt;all_gather_into_tensor(self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;_full_buffer, self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;flat_param_shard, &lt;span style="color:#f92672"&gt;...&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; pg, layout &lt;span style="color:#f92672"&gt;in&lt;/span&gt; zip(&lt;span style="color:#f92672"&gt;...&lt;/span&gt;):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; slice_ &lt;span style="color:#f92672"&gt;=&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;_full_buffer[&lt;span style="color:#f92672"&gt;...&lt;/span&gt;]
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pg&lt;span style="color:#f92672"&gt;.&lt;/span&gt;compute&lt;span style="color:#f92672"&gt;.&lt;/span&gt;data &lt;span style="color:#f92672"&gt;=&lt;/span&gt; slice_&lt;span style="color:#f92672"&gt;.&lt;/span&gt;view(layout&lt;span style="color:#f92672"&gt;.&lt;/span&gt;original_shape) &lt;span style="color:#75715e"&gt;# ← view&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;forward中，&lt;code&gt;y = x @ pg.compute&lt;/code&gt;，autograd会在saved tape里存&lt;code&gt;pg.compute&lt;/code&gt;这个tensor的 view，以为了backward计算dL/dx。这个view的storage就是&lt;code&gt;_full_buffer&lt;/code&gt;的storage。&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
+&lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;4
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;reshard&lt;/span&gt;(self):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; pg &lt;span style="color:#f92672"&gt;in&lt;/span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;param_groups:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pg&lt;span style="color:#f92672"&gt;.&lt;/span&gt;compute&lt;span style="color:#f92672"&gt;.&lt;/span&gt;data &lt;span style="color:#f92672"&gt;=&lt;/span&gt; torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;empty(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, &lt;span style="color:#f92672"&gt;...&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; self&lt;span style="color:#f92672"&gt;.&lt;/span&gt;_full_buffer &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt; &lt;span style="color:#75715e"&gt;# ← 我们的引用没了,但 autograd 还引用着&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;1F1B的情况下，有很多个microbatch在in-flight，因此多份 &lt;code&gt;_full_buffer&lt;/code&gt; 同时活着占用显存无法释放，直到对应mb的backward完成。&lt;/p&gt;
+&lt;p&gt;SAC能部分解决这个问题，因为SAC在backward时会直接重跑 forward 重算 activation，这次重算的unshard是short-lived 的,重算完直接reshard释放,autograd把它当作普通临时tensor而不是saved tensor，因此不持续占用显存，无论多少个microbatch都不会显著堆积。
+ZeRO-3 + AC的节省量通常大幅超过单纯&amp;quot;AC 省 activation&amp;quot;的节省量就是这个原因，多出来的部分就是消除autograd-held view的收益。&lt;/p&gt;
+&lt;p&gt;ZeRO-1/2没有这个问题，因为ZeRO-1/2不分片param,&lt;code&gt;compute.data&lt;/code&gt; 全程是完整的 bf16 权重，因此不需要unshard buffer。&lt;/p&gt;
+&lt;h4 id="相关问题"&gt;相关问题
+&lt;/h4&gt;&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;PyTorch FSDP2 RFC&lt;/strong&gt;(GitHub issue #114299):&lt;/li&gt;
+&lt;/ul&gt;
+
+ &lt;blockquote&gt;
+ &lt;p&gt;&amp;quot;FSDP uses &lt;code&gt;untyped_storage().resize_(0)&lt;/code&gt; and &lt;code&gt;resize_(orig_storage_size)&lt;/code&gt;. This is a hacky trick to make autograd work, even in the presence of aliases. Autograd packs a reference to unsharded_param ... in forward; FSDP frees the storage unbeknownst to autograd on the promise that it will restore it before the gradient computation in backward.&amp;quot;&lt;/p&gt;
+
+ &lt;/blockquote&gt;
+&lt;p&gt;FSDP2 用一个违反autograd契约的storage resize hack的技术方案来绕过，也就是说在autograd不知道的情况下释放了storage。这在工程上是可以的，但因为我们的个人项目最好要保持框架的简洁性，就不这么做了。&lt;/p&gt;
+&lt;h3 id="通信组communication-group划分导致显存的不降反增"&gt;通信组（Communication Group）划分导致显存的不降反增
 &lt;/h3&gt;&lt;p&gt;在引入PP后，每一台机器（或每一张卡）只负责模型的一部分层。如果再引入ZeRO-3，那么理想状态下，单卡只存8层参数的$1/N$。但是，在实际上的训练现实当中，因为PP在前向传播时，每张卡都在高速、连续地处理不同的 Micro-batch（微批次）。为了不让流水线产生停顿和空泡，ZeRO-3必须为&lt;strong&gt;所有正在流水线中流动的Micro-batch&lt;/strong&gt;预留足够的缓存空间，更激进来说甚至要提前拉取（Prefetch）并缓存完整的参数。这导致我们必须重新占用这些好不容易省下来的显存。为了应付多阶段流水线并发，被ZeRO-3的 &lt;strong&gt;&lt;code&gt;All-Gather&lt;/code&gt; 缓冲区、预取缓冲区（Prefetch Buffer）以及临时激活值&lt;/strong&gt;很可能（实际上是几乎一定）最终被撑得比单纯用PP还要大！&lt;/p&gt;
 &lt;p&gt;这是一个从数学理论上无解的问题。因为如果不开这个缓冲区，那么通信就要序列化。如果通信序列化，那么流水线就会有空泡。如果流水线有空泡，那么整个训练的MFU就会下降。众所周知，MFU是一个比显存占用还要关键的指标，等同于公司每分每秒的真金白银。因此，二者不可兼得，只能不放在一起做了。&lt;/p&gt;
 &lt;h3 id="工业界的解决方案"&gt;工业界的解决方案
@@ -30,7 +891,7 @@
 &lt;/h2&gt;&lt;p&gt;这就是查询参考方案性能的时候查到的一件事情，前面也多多少少提了一句。其实，在Deepspeed的方案中，ZeRO-2和ZeRO-3与Pipeline Parallelism的实现是不兼容的！这是我好不容易把正确性调对、绞尽脑汁也没法解决ZeRO-3性能问题之后，迫于无奈尝试参考官方实现的时候震惊地得知的结果。&lt;/p&gt;
 &lt;p&gt;不过，实测下来，ZeRO-2+PP仍然是相对来说有实际意义的，测试的数据也支持这一个结论。换言之，我们的方案已经在feature上超过了Deepspeed（哈）。当然，这很大程度上是因为我们的框架本质上是一个个人项目框架，而不是需要处理所有边界情况的工业级项目；但即使如此，这也意味着我们的开发过程并不是毫无作用的。探索这些可行和不可行的边界，正是好的coding项目应该做的事情。如果读者对这部分感兴趣，源代码已经开源在仓库里，有兴趣的读者可以去阅读。&lt;/p&gt;
 &lt;h2 id="总结"&gt;总结
-&lt;/h2&gt;&lt;p&gt;到这一步为止，我们已经完成了除了SFT训练支持之外的所有核心feature组件的实现。接下来是SFT，它的复杂度应该会比我们已经走过的路程低很多。后面的很多调度方案等等组件，也是在现有框架架构的基础上进行扩展，而不是进行颠覆式的重构和侵入式修改。无论如何，这已经是一个令人兴奋和欣慰的进展，而且Femtotron作为一个预训练框架已经来到了。集中开发的工作仍然在继续，可能会有一篇阶段式里程碑的博客，总结我们已经具有的feature情况。可能还有一篇专门用来做Profiling，为未来可能的参数调优做准备。whatever，道阻且长，慢慢做吧。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #8 选择性激活检查点 Selective Activation Checkpointing</title><link>https://Koas-W.github.io/posts/20260514sac/</link><pubDate>Fri, 15 May 2026 22:58:58 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260514sac/</guid><description>&lt;p&gt;今天的工作量实现的是选择性激活检查点（SAC，Selective Activation Checkpointing）。这个组件相当简单，因为Pytorch已经。因此这篇日志会相对来说较短，主要着重于介绍它的概念、机制，以及实现过程中遇到的值得记录的bug，以供读者或者其他的后来人参考，避免踩同样的坑。&lt;/p&gt;
+&lt;/h2&gt;&lt;p&gt;到这一步为止，我们已经完成了除了SFT训练支持之外的所有核心feature组件的实现。接下来是SFT，它的复杂度应该会比我们已经走过的路程低很多。后面的很多调度方案等等组件，也是在现有框架架构的基础上进行扩展，而不是进行颠覆式的重构和侵入式修改。无论如何，这已经是一个令人兴奋和欣慰的进展，而且Femtotron作为一个预训练框架已经来到了。集中开发的工作仍然在继续，可能会有一篇阶段式里程碑的博客，总结我们已经具有的feature情况。可能还有一篇专门用来做Profiling，为未来可能的参数调优做准备。whatever，道阻且长，慢慢做吧。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #8 选择性激活检查点 Selective Activation Checkpointing</title><link>https://Koas-W.github.io/posts/20260514-sac/</link><pubDate>Fri, 15 May 2026 22:58:58 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260514-sac/</guid><description>&lt;p&gt;今天的工作量实现的是选择性激活检查点（SAC，Selective Activation Checkpointing）。这个组件相当简单，因为Pytorch已经。因此这篇日志会相对来说较短，主要着重于介绍它的概念、机制，以及实现过程中遇到的值得记录的bug，以供读者或者其他的后来人参考，避免踩同样的坑。&lt;/p&gt;
 &lt;h2 id="sac是什么"&gt;SAC是什么
 &lt;/h2&gt;&lt;p&gt;SAC是一种降低训练中内存占用峰值的技术，代价是增加反向传播当中的计算量。它的具体原理是，每隔一段“距离”，保存一个可以进行前向传播的中间激活值，抛弃这个距离中的两个端点之间的所有其他值。当反向传播开始/越过一个检查点的末尾的时候，我们如果遇到的接下来的反向传播路径当中没有现成的中间激活值，就从最近的一个检查点重新向前计算，重新铺好这段反向传播需要的中间激活值路径。&lt;/p&gt;
 &lt;h3 id="sac的理论最优情形"&gt;SAC的理论最优情形
@@ -137,7 +998,7 @@
 &lt;/h3&gt;&lt;p&gt;在这个过程中，遇到了一个特别棘手的问题：Pytorch反复报错。当第一次前向传播的时候很正常，接下来反向传播回去的时候却报错，而报错信息显示多了两个不知道是什么的tensor，整个ckpt的tensor数量从38个变成了40个，对不上。这个bug的排查过程非常艰难，几乎花了我3~4个小时的时间，才定位和理解了问题发生的具体原理。&lt;/p&gt;
 &lt;p&gt;在排查之后发现，发现这其实不是我们本身的代码实现错误，而是Pytorch后端调用的自动切换导致的。实际上，这就是HuggingFace著名的 &lt;code&gt;use_cache&lt;/code&gt; + gradient checkpointing 互斥问题。&lt;/p&gt;
 &lt;p&gt;它的具体的引起原因来源于LlamaModel的默认设置，config.use_cache=True，也即自动保存和管理KV cache，以加速前向传播。第一次forward时，cache为空，因此调用了 &lt;code&gt;_scaled_dot_product_flash_attention&lt;/code&gt;(因为它满足FlashAttention的shape要求)。 recompute时，cache已经被填充，因此K/V的seq长度翻倍，不再是空tensor，因此数量就对不上，同时不满足FlashAttention的causal mask约束，dispatcher fallback到math backend，因此具体的后端实现也发生了变化。这两个因素加起来，导致报错。&lt;/p&gt;
-&lt;p&gt;它其实有一个内置防御，类似这样的形式：&lt;/p&gt;
+&lt;p&gt;它其实原本是有一个内置防御机制，避免这个问题的，类似这样的形式：&lt;/p&gt;
 &lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
 &lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
 &lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;1
@@ -160,13 +1021,14 @@
 &lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; use_cache &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#66d9ef"&gt;False&lt;/span&gt;
 &lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
 &lt;/div&gt;
-&lt;/div&gt;&lt;p&gt;但只有调用 &lt;code&gt;model.gradient_checkpointing_enable()&lt;/code&gt; 或者把 &lt;code&gt;model.gradient_checkpointing = True&lt;/code&gt; 设上时这条防御才生效。它的判据是 &lt;code&gt;self.gradient_checkpointing&lt;/code&gt; 这个flag，而不是探测调用栈里有没有checkpoint，因此失效。这确实是一个值得记录下来的教训，在部分采用现有基础设施来构建框架的时候，一定要注意这种细节问题。&lt;/p&gt;
+&lt;/div&gt;&lt;p&gt;但只有调用 &lt;code&gt;model.gradient_checkpointing_enable()&lt;/code&gt; 或者把 &lt;code&gt;model.gradient_checkpointing = True&lt;/code&gt; 设上时这条防御才生效。它的判据是 &lt;code&gt;self.gradient_checkpointing&lt;/code&gt; 这个flag，而不是探测调用栈里有没有checkpoint，因此失效。这确实是一个值得记录下来的教训，在部分采用现有基础设施来构建框架的时候，一定要注意这种细节问题，即内部耦合的组件的边界恰好被切分开的时候，所暴露出的协调失效问题。&lt;/p&gt;
 &lt;h3 id="sac能带来多少收益"&gt;SAC能带来多少收益
 &lt;/h3&gt;&lt;p&gt;来看图：&lt;/p&gt;
-&lt;p&gt;[一张seq_len=32的占位符]&lt;/p&gt;
-&lt;p&gt;[一张seq_len=1024的占位符]&lt;/p&gt;
-&lt;p&gt;亲爱的读者们，如果你们无论怎么测试，得到的都是类似前者的结果，你们会不会质疑自己的代码实现有问题呢？至少我是会的：因为内存占用是bit-exact的完全没有变化，看上去更像是SAC根本没有正确加载和起效，而不是它真的没有用。我反复排查，最后发现其实代码根本没什么问题，确实就是它没有压低显存峰值。通过反复的测试参数，将seq_len从测试用toy-model的32改成1024，就得到了第二张图内的数据，看上去就正常多了。&lt;/p&gt;
-&lt;p&gt;这其实说明一件事：SAC对于seq_len不是非常长的情况，能够产生的收益非常有限，而且整体的量级并不如传统的博客、资料当中描述的那么明显。这很可能是因为SAC出现的时间早于Flash Attention导致的。后者虽然在scope上是一个对于计算局部性的著名Kernel优化，但无意当中抢走了Selective Activation Checkpointing的饭碗，直接让SAC按标准注意力实现的优化收益标准彻底无效了。&lt;/p&gt;
+&lt;p&gt;&lt;img alt="seq_len16" class="gallery-image" data-flex-basis="515px" data-flex-grow="214" height="367" loading="lazy" sizes="(max-width: 767px) calc(100vw - 30px), (max-width: 1023px) 700px, (max-width: 1279px) 950px, 1232px" src="https://Koas-W.github.io/posts/20260514-sac/seq_len16.png" width="789"&gt;&lt;/p&gt;
+&lt;p&gt;&lt;img alt="seq_len32" class="gallery-image" data-flex-basis="516px" data-flex-grow="215" height="372" loading="lazy" sizes="(max-width: 767px) calc(100vw - 30px), (max-width: 1023px) 700px, (max-width: 1279px) 950px, 1232px" src="https://Koas-W.github.io/posts/20260514-sac/seq_len32.png" srcset="https://Koas-W.github.io/posts/20260514-sac/seq_len32_hu_42f70f03e201c077.png 800w, https://Koas-W.github.io/posts/20260514-sac/seq_len32.png 801w" width="801"&gt;&lt;/p&gt;
+&lt;p&gt;&lt;img alt="seq_len1024" class="gallery-image" data-flex-basis="514px" data-flex-grow="214" height="367" loading="lazy" sizes="(max-width: 767px) calc(100vw - 30px), (max-width: 1023px) 700px, (max-width: 1279px) 950px, 1232px" src="https://Koas-W.github.io/posts/20260514-sac/seq_len1024.png" width="787"&gt;&lt;/p&gt;
+&lt;p&gt;亲爱的读者们，如果你们无论怎么测试，得到的都是类似前者的第一张图的结果，你们会不会质疑自己的代码实现有问题呢？至少我是会的：因为内存占用是bit-exact的完全没有变化，看上去更像是SAC根本没有正确加载和起效，而不是它在机制上是真的没有用。我反复排查了很久是不是实现有问题（包括在最后走投无路开始折磨AI），最后发现其实代码根本没什么问题，确实就是它没有压低显存峰值。通过反复的测试参数，将seq_len从测试用toy-model的16改成32和1024，就得到了第二张图和第三张图内的数据结果，而第三张图看上去就正常多了。&lt;/p&gt;
+&lt;p&gt;这其实说明一件事：SAC对于seq_len不是非常长的情况，能够产生的收益非常有限。但又能够看到，ZeRO-3对于seq_len非常长的情况，收益同样也有限，甚至还不如ZeRO-2。这说明两者其实应该同时使用，而且在DP较多、PP较少的组合上收益更明显。而且，在通常的toy-model的参数范围内，收益整体的量级并不如传统的博客、资料当中描述的那么明显。这很可能是因为SAC出现的时间早于Flash Attention导致的。后者虽然在scope上是一个对于计算局部性的著名Kernel优化，但无意当中抢走了Selective Activation Checkpointing的饭碗，直接让SAC按标准注意力实现的优化收益标准彻底无效了。&lt;/p&gt;
 &lt;p&gt;实际上，在Flash Attention被发明之后，SAC的核心收益就变化了：因为Flash Attention的计算流根本不物化那个巨大的完整的注意力矩阵，而SAC最初出现的主要目的就是为了规避这个巨大矩阵带来的显存占用问题，导致它从一个几乎是不做到最好就完全不能进行大模型训练的核心技术，退居为一个只要做的合理就能产生合理收益的技术。它节省的现在主要是超长序列带来的中间激活值的膨胀问题，而不再是一个万能万灵的通用手段。&lt;/p&gt;
 &lt;h3 id="如果sac特别慢可能发生了什么"&gt;如果SAC特别慢，可能发生了什么
 &lt;/h3&gt;&lt;p&gt;另一个问题是在测试的时候发现SAC特别慢，到了难以忍受的地步。这个其实是个bug，其来源让人好笑，是调试的时候加上的&lt;code&gt;ActivationCheckpointWrapper.forward&lt;/code&gt; 中debug设置导致的：&lt;/p&gt;
@@ -191,7 +1053,7 @@
 &lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
 &lt;/div&gt;
 &lt;/div&gt;&lt;p&gt;从机制原理上来说，这个&lt;code&gt;torch.utils.checkpoint.checkpoint(debug=True)&lt;/code&gt; 的设置会激活一个 &lt;code&gt;TorchDispatchMode&lt;/code&gt;, &lt;strong&gt;给原始forward装上Python级dispatch&lt;/strong&gt;。这是为了使得每个op能够经过Python一遍，以完整记录元数据，进一步为了recompute时检测不一致，能够给出方便调试的友好错误。这原本是为了。然而，改完了之后却忘了改回来，随后彻底忘记了这件事，搞得我在之后做集成测试的时候奇慢无比，浪费了很多时间（起码多花了一个多小时，多花了五六十块钱，呜呜呜）。&lt;/p&gt;
-&lt;p&gt;如果大家遇到类似表现的问题，记得排查这个设置有没有改对。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #7 ZeRO-3模式：抽象设计、Bug排查和教训总结</title><link>https://Koas-W.github.io/posts/20260513zero3/</link><pubDate>Wed, 13 May 2026 23:41:44 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260513zero3/</guid><description>&lt;p&gt;今天的工作量实现的是我个人认为到目前以来最难的一个组件：ZeRO-3。在整个开发的过程中，不仅需要修改的代码量很大、不可避免的产生了许多侵入式的修改，而且即使设计已经相当小心，还是产生了许多复杂的bug。我们首先回顾一下不同ZeRO等级的切分情况，来为下面的总结做铺垫。&lt;/p&gt;
+&lt;p&gt;如果大家遇到类似表现的问题，记得排查这个设置有没有改对。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #7 ZeRO-3模式：抽象设计、Bug排查和教训总结</title><link>https://Koas-W.github.io/posts/20260513-zero3/</link><pubDate>Wed, 13 May 2026 23:41:44 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260513-zero3/</guid><description>&lt;p&gt;今天的工作量实现的是我个人认为到目前以来最难的一个组件：ZeRO-3。在整个开发的过程中，不仅需要修改的代码量很大、不可避免的产生了许多侵入式的修改，而且即使设计已经相当小心，还是产生了许多复杂的bug。我们首先回顾一下不同ZeRO等级的切分情况，来为下面的总结做铺垫。&lt;/p&gt;
 &lt;table&gt;
  &lt;thead&gt;
  &lt;tr&gt;
