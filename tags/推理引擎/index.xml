@@ -1,4 +1,30 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>推理引擎 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E6%8E%A8%E7%90%86%E5%BC%95%E6%93%8E/</link><description>Recent content in 推理引擎 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Sat, 18 Apr 2026 21:56:39 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E6%8E%A8%E7%90%86%E5%BC%95%E6%93%8E/index.xml" rel="self" type="application/rss+xml"/><item><title>Pico-vLLM 开发日志 #14 Prefix Caching</title><link>https://Koas-W.github.io/posts/20260417-prefixcaching/</link><pubDate>Sat, 18 Apr 2026 21:56:39 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260417-prefixcaching/</guid><description>&lt;p&gt;“如果你想体验极致的数学规整美感和爽感，就去实现Paged Attention；如果你想体验抽象分层设计原则和一致性维持的究极长痛，去实现Prefix Caching。”&lt;/p&gt;
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>推理引擎 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E6%8E%A8%E7%90%86%E5%BC%95%E6%93%8E/</link><description>Recent content in 推理引擎 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Thu, 21 May 2026 23:12:39 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E6%8E%A8%E7%90%86%E5%BC%95%E6%93%8E/index.xml" rel="self" type="application/rss+xml"/><item><title>LLM 学习日志 #5 巨型内核：MegaKernel</title><link>https://Koas-W.github.io/posts/20260521megakernel/</link><pubDate>Thu, 21 May 2026 23:12:39 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260521megakernel/</guid><description>&lt;p&gt;这是最近笔者很感兴趣的一个新技术，因此对其进行了一些论文的阅读了解。在此整理为一篇简短的日志，以备忘和供读者参考和了解相关的技术。&lt;/p&gt;
+&lt;h2 id="什么是megakernel"&gt;什么是MegaKernel
+&lt;/h2&gt;&lt;p&gt;MegaKernel（巨型内核） 是一种 GPU 推理优化技术，其核心思想是把整个LLM的推理过程，包括所有计算、跨 GPU 通信融合(fuse)进一个单独的 GPU kernel 中执行，而不是像传统方式那样把每个算子(operator)启动成一个独立的 kernel。&lt;/p&gt;
+&lt;p&gt;传统 LLM 推理通常依赖一长串 GPU kernel launch 和外部通信调用，这导致硬件利用率不足。巨型内核通过端到端的 GPU 融合方式,把跨多层、多迭代、多 GPU 的操作全部融合进一个 kernel，从而消除启动开销，实现细粒度的软件流水线,并让计算与通信重叠。&lt;/p&gt;
+&lt;h2 id="值得关注的社区进展"&gt;值得关注的社区进展
+&lt;/h2&gt;&lt;p&gt;虽然说是新技术，其实也不是很新了。它是在2025年由几个团队几乎同期推动起来的方向。具体而言又分为两条方向的线索：&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;1. 斯坦福 Hazy Research 团队(Tri Dao 等人所在组)&lt;/strong&gt;&lt;/p&gt;
+&lt;p&gt;2025 年 3 月发布了 ThunderMLA，这是一个针对 DeepSeek MLA 解码的融合 megakernel，在多种工作负载下比 DeepSeek 的 FlashMLA 快 20–35%。随后在 5 月发布了著名的 &amp;quot;No Bubbles&amp;quot; 博客《Designing a Low-Latency Megakernel for Llama-1B》，指出 vLLM、SGLang 等主流推理引擎在 H100 上跑 Llama-3.2-1B 单序列时，GPU 带宽利用率最多只有 50%，而 megakernel 方法可以大幅突破这个瓶颈。这部分工作主要注重开发手工设计的高性能megakernel。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;2. CMU 贾志豪(Zhihao Jia)团队&lt;/strong&gt;&lt;/p&gt;
+&lt;p&gt;主要开发的是Mirage Persistent Kernel (MPK)，注重系统性的自动化编译器路线。该项目由 CMU、UW、Berkeley、NVIDIA、清华的联合团队开发，2025 年 6 月开源，核心成员包括 Xinhao Cheng、Mengdi Wu、Xupeng Miao、陈天奇(Tianqi Chen)、贾志豪等等知名研究者。MPK 是首个能将多 GPU 模型推理自动转换为单个高性能 megakernel 的编译器和运行时系统，引入了 SM 级别(streaming multiprocessor)的图表示来捕获数据依赖，从而实现跨算子软件流水线、细粒度 kernel 重叠等以前不可行的 GPU 优化。&lt;/p&gt;
+&lt;p&gt;值得关注的论文：&lt;/p&gt;
+&lt;p&gt;《Mirage Persistent Kernel: A Compiler and Runtime for Mega-Kernelizing Tensor Programs》(arXiv:2512.22219)&lt;/p&gt;
+&lt;p&gt;《Mirage: A Multi-Level Superoptimizer for Tensor Programs》&lt;/p&gt;
+&lt;p&gt;《Event Tensor: A Unified Abstraction for Compiling Dynamic Megakernel》 Megakernel编译抽象&lt;/p&gt;
+&lt;p&gt;《UniEP: Unified Expert-Parallel MoE MegaKernel for LLM Training》(arXiv:2604.19241) 关于MoE+训练场景+MegaKernel&lt;/p&gt;
+&lt;h2 id="megakernel的核心抽象和核心优势"&gt;MegaKernel的核心抽象和核心优势
+&lt;/h2&gt;&lt;h3 id="sm-级任务图sm-level-task-graph"&gt;SM 级任务图(SM-level task graph)
+&lt;/h3&gt;&lt;p&gt;MPK 最有标志性的抽象。众所周知传统编译器(PyTorch、TVM、Triton)的最小调度单位是整张 GPU 上的一个 kernel。MPK 提出在单个流式多处理器(SM)粒度上表示计算和 GPU 间通信,引入了一个叫 tGraph 的 SM 级图表示，节点是跑在单个 SM 上的任务，边是任务间的细粒度依赖。&lt;/p&gt;
+&lt;p&gt;这意味着调度器/编译器处理的粒度不再是类似&amp;quot;matmul - attention - matmul&amp;quot;的结构，而是&amp;quot;matmul 的第 5 个 tile 在 SM 17 完成 - attention 中依赖这个 tile 的任务现在可以在 SM 17 开始&amp;quot;这样的结构。它本身可以消除一部分jitter和流水线空泡，但是和下文的动态调度结合起来更有威力。&lt;/p&gt;
+&lt;h3 id="片上解释器on-gpu-interpreter持久内核"&gt;片上解释器(on-GPU interpreter)/持久内核
+&lt;/h3&gt;&lt;p&gt;持久内核作为 GPU 性能优化概念已经被广泛认识和采用，但 MegaKernel 明显将其推进到进一步的高度。整个 megakernel 启动一次后,每个 SM 都初始化一个解释器，开始执行一串指令序列(序列在 launch 之前调度到每个 SM 的队列中)。解释器通过类似编译器的指令重排的方式进行流水线填充，从而消除操作之间的内存气泡。&lt;/p&gt;
+&lt;h3 id="静态和动态调度"&gt;静态和动态调度
+&lt;/h3&gt;&lt;p&gt;该说不说，GPU 终于发展到了能让 CPU 失业的临界点。如果动态调度成为GPU&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;静态调度&lt;/strong&gt; 在编译期就把指令切分到每个 SM 的私有队列。好处是可以预取并把多条指令直接载入共享内存,取指开销极低;坏处是要求编译器提前静态划分指令,而指令的延迟是可变的，SM 之间还存在抖动(jitter)，会造成负载不均。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;动态调度&lt;/strong&gt; 用一个全局指令队列让所有 SM 抢占式领取。取指开销更高(需要 global memory 往返加原子锁),但可以隐藏在上一条指令执行期间;不需要编译器提前分配指令,SM 准备好就主动 pop 一条出来,这样自然对 jitter 自适应——快的 SM 能帮慢的 SM 分担工作。Luminal 选了动态调度,MPK 也是去中心化调度。&lt;/p&gt;
+&lt;h2 id="megakernel的发展前景"&gt;MegaKernel的发展前景
+&lt;/h2&gt;</description></item><item><title>Pico-vLLM 开发日志 #14 Prefix Caching</title><link>https://Koas-W.github.io/posts/20260417-prefixcaching/</link><pubDate>Sat, 18 Apr 2026 21:56:39 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260417-prefixcaching/</guid><description>&lt;p&gt;“如果你想体验极致的数学规整美感和爽感，就去实现Paged Attention；如果你想体验抽象分层设计原则和一致性维持的究极长痛，去实现Prefix Caching。”&lt;/p&gt;
 &lt;p&gt;​																							——我自己&lt;/p&gt;
 &lt;p&gt;======================================================================&lt;/p&gt;
 &lt;p&gt;这么多天没更新，今天终于更新了。之所以没有和之前一样2~3天一更新，是因为这中间的间隔，几乎全部在对Prefix Caching进行架构设计、实现迭代和反复的DEBUG。个人的体感是，在所有的推理框架实现当中，Prefix Caching绝对是除了分布式中最复杂的部分（当然，这部分非常非常大，但对于许多feature来说，其实并不是和分布式本身强绑定的）以外的皇冠上的明珠，是实现最为复杂的、同时也是相当重要的架构级feature，其挑战在于其并非是局部的算子或者数据结构设计，而是同时牵动存储分配、请求生命周期、缓存一致性的全局性架构。尤其是，如果需求足够好的兼容性，也就是需求既有radix-tree的token级别的粒度和相应可扩展性，又需求底层的Block Manager能够天然、不需要额外处理的自然同时兼容radix-tree模式，会引入非常复杂的系统架构设计需求和要求非常小心的实现。因此，这里会完整的把我的开发工程、主要最后定稿的想法和设计模式、途中遇到的一些问题，尽可能在遗忘和丢失之前。如果能够帮助到后来者和读者的话，那就太好了。&lt;/p&gt;
