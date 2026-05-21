@@ -22,7 +22,7 @@
 &lt;h3 id="静态和动态调度"&gt;静态和动态调度
 &lt;/h3&gt;&lt;p&gt;该说不说，GPU 终于发展到了能让 CPU 失业的临界点。如果动态调度成为 GPU 的标配方案，CPU 可能基本上就会变成 GPU 的启动器。让我们观察它的未来发展。&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;静态调度&lt;/strong&gt; 在编译期就把指令切分到每个 SM 的私有队列。好处是可以预取并把多条指令直接载入共享内存,取指开销极低；坏处是要求编译器提前静态划分指令，而指令的延迟是可变的，SM 之间还存在抖动(jitter)，会造成负载不均。&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;动态调度&lt;/strong&gt; 用一个全局指令队列让所有 SM 抢占式领取。取指开销更高(需要 global memory 往返加原子锁)，但可以隐藏在上一条指令执行期间，不需要编译器提前分配指令。当一个 SM 准备好时，从全局队列中取出一条指令执行。这个方案的好处是自然对 jitter 自适应，快的 SM 得到更多工作，因此具有负反馈的自均衡特性。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;动态调度&lt;/strong&gt; 用一个全局指令队列让所有 SM 抢占式领取。取指开销更高(需要 global memory 往返加原子锁)，但可以隐藏在上一条指令执行期间，不需要编译器提前分配指令。当一个 SM 准备好时，从全局队列中取出一条指令执行。这个方案的好处是自然对 jitter 自适应，快的 SM 得到更多工作，因此具有负反馈的自均衡特性。当静态调度的空泡累积的较多的时候，优势就会很明显。&lt;/p&gt;
 &lt;h2 id="megakernel的发展前景"&gt;MegaKernel的发展前景
 &lt;/h2&gt;&lt;p&gt;这套机制的代价主要是工程复杂度和动态性支持。现代 LLM 服务负载本身是动态和不可预测的，因此需要 continuous batching 甚至变长输入之类的方案。要在单个 megakernel 里支持这些动态形状，常常需要为每种可能的形状重新生成或重新编译 kernel，启动延迟会变得不可接受，甚至当形状空间过大时根本做不到。现有的 megakernel 框架目前主要面向 single-batch 推理，在动态形状或数据相关负载下还不能与通用推理系统公平对比。这被认为是未来一两年这个方向的研究重点。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #11 监督微调 Supervised Fine-Tuning, SFT</title><link>https://Koas-W.github.io/posts/20260518-sft/</link><pubDate>Tue, 19 May 2026 00:03:25 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260518-sft/</guid><description>&lt;p&gt;这是一个相对较小的更新工作量。虽然是minor的feature，但SFT的数据划分模式还是值得总结一下的，毕竟俗话说的好，魔鬼藏在细节中嘛。&lt;/p&gt;
 &lt;p&gt;当然，这篇不会很长就是了。&lt;/p&gt;
