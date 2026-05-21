@@ -20,11 +20,11 @@
 &lt;h3 id="片上解释器on-gpu-interpreter持久内核"&gt;片上解释器(on-GPU interpreter)/持久内核
 &lt;/h3&gt;&lt;p&gt;持久内核作为 GPU 性能优化概念已经被广泛认识和采用，但 MegaKernel 明显将其推进到进一步的高度。整个 megakernel 启动一次后,每个 SM 都初始化一个解释器，开始执行一串指令序列(序列在 launch 之前调度到每个 SM 的队列中)。解释器通过类似编译器的指令重排的方式进行流水线填充，从而消除操作之间的内存气泡。&lt;/p&gt;
 &lt;h3 id="静态和动态调度"&gt;静态和动态调度
-&lt;/h3&gt;&lt;p&gt;该说不说，GPU 终于发展到了能让 CPU 失业的临界点。如果动态调度成为GPU&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;静态调度&lt;/strong&gt; 在编译期就把指令切分到每个 SM 的私有队列。好处是可以预取并把多条指令直接载入共享内存,取指开销极低;坏处是要求编译器提前静态划分指令,而指令的延迟是可变的，SM 之间还存在抖动(jitter)，会造成负载不均。&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;动态调度&lt;/strong&gt; 用一个全局指令队列让所有 SM 抢占式领取。取指开销更高(需要 global memory 往返加原子锁),但可以隐藏在上一条指令执行期间;不需要编译器提前分配指令,SM 准备好就主动 pop 一条出来,这样自然对 jitter 自适应——快的 SM 能帮慢的 SM 分担工作。Luminal 选了动态调度,MPK 也是去中心化调度。&lt;/p&gt;
+&lt;/h3&gt;&lt;p&gt;该说不说，GPU 终于发展到了能让 CPU 失业的临界点。如果动态调度成为 GPU 的标配方案，CPU 可能基本上就会变成 GPU 的启动器。让我们观察它的未来发展。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;静态调度&lt;/strong&gt; 在编译期就把指令切分到每个 SM 的私有队列。好处是可以预取并把多条指令直接载入共享内存,取指开销极低；坏处是要求编译器提前静态划分指令，而指令的延迟是可变的，SM 之间还存在抖动(jitter)，会造成负载不均。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;动态调度&lt;/strong&gt; 用一个全局指令队列让所有 SM 抢占式领取。取指开销更高(需要 global memory 往返加原子锁)，但可以隐藏在上一条指令执行期间，不需要编译器提前分配指令。当一个 SM 准备好时，从全局队列中取出一条指令执行。这个方案的好处是自然对 jitter 自适应，快的 SM 得到更多工作，因此具有负反馈的自均衡特性。&lt;/p&gt;
 &lt;h2 id="megakernel的发展前景"&gt;MegaKernel的发展前景
-&lt;/h2&gt;</description></item><item><title>Pico-vLLM 开发日志 #14 Prefix Caching</title><link>https://Koas-W.github.io/posts/20260417-prefixcaching/</link><pubDate>Sat, 18 Apr 2026 21:56:39 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260417-prefixcaching/</guid><description>&lt;p&gt;“如果你想体验极致的数学规整美感和爽感，就去实现Paged Attention；如果你想体验抽象分层设计原则和一致性维持的究极长痛，去实现Prefix Caching。”&lt;/p&gt;
+&lt;/h2&gt;&lt;p&gt;这套机制的代价主要是工程复杂度和动态性支持。现代 LLM 服务负载本身是动态和不可预测的，因此需要 continuous batching 甚至变长输入之类的方案。要在单个 megakernel 里支持这些动态形状，常常需要为每种可能的形状重新生成或重新编译 kernel，启动延迟会变得不可接受，甚至当形状空间过大时根本做不到。现有的 megakernel 框架目前主要面向 single-batch 推理，在动态形状或数据相关负载下还不能与通用推理系统公平对比。这被认为是未来一两年这个方向的研究重点。&lt;/p&gt;</description></item><item><title>Pico-vLLM 开发日志 #14 Prefix Caching</title><link>https://Koas-W.github.io/posts/20260417-prefixcaching/</link><pubDate>Sat, 18 Apr 2026 21:56:39 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260417-prefixcaching/</guid><description>&lt;p&gt;“如果你想体验极致的数学规整美感和爽感，就去实现Paged Attention；如果你想体验抽象分层设计原则和一致性维持的究极长痛，去实现Prefix Caching。”&lt;/p&gt;
 &lt;p&gt;​																							——我自己&lt;/p&gt;
 &lt;p&gt;======================================================================&lt;/p&gt;
 &lt;p&gt;这么多天没更新，今天终于更新了。之所以没有和之前一样2~3天一更新，是因为这中间的间隔，几乎全部在对Prefix Caching进行架构设计、实现迭代和反复的DEBUG。个人的体感是，在所有的推理框架实现当中，Prefix Caching绝对是除了分布式中最复杂的部分（当然，这部分非常非常大，但对于许多feature来说，其实并不是和分布式本身强绑定的）以外的皇冠上的明珠，是实现最为复杂的、同时也是相当重要的架构级feature，其挑战在于其并非是局部的算子或者数据结构设计，而是同时牵动存储分配、请求生命周期、缓存一致性的全局性架构。尤其是，如果需求足够好的兼容性，也就是需求既有radix-tree的token级别的粒度和相应可扩展性，又需求底层的Block Manager能够天然、不需要额外处理的自然同时兼容radix-tree模式，会引入非常复杂的系统架构设计需求和要求非常小心的实现。因此，这里会完整的把我的开发工程、主要最后定稿的想法和设计模式、途中遇到的一些问题，尽可能在遗忘和丢失之前。如果能够帮助到后来者和读者的话，那就太好了。&lt;/p&gt;
