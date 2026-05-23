@@ -29,7 +29,8 @@
 &lt;/h2&gt;&lt;h3 id="减少micro-batch-size增加micro-batch-num的方案"&gt;减少micro-batch-size，增加micro-batch-num的方案
 &lt;/h3&gt;&lt;p&gt;这是一个数学上几乎等价的方案。可以在保持global batch size不变的前提下，把单个micro-batch切小，从而抬高M，让(P−1)/M同样趋近于 0。它的好处是完全不增加通信量，但坏处是单卡的计算强度（arithmetic intensity）下降。如果计算强度过低、GEMM等性能核心操作进入了Memory-bound区间，那么收益就不再是线性的了，这会导致总端到端MFU反而变差，那就得不偿失了。每个micro-batch都有一份固定overhead（kernel launch、通信 setup、optimizer 相关的元数据等），因此实际上micro-batch-num更多和Interleaved 1F1B的V同时进行调整，而不是作为两个相对独立的优化方法。&lt;/p&gt;
 &lt;h3 id="增加pipeline-stage数量的方案"&gt;增加Pipeline Stage数量的方案
-&lt;/h3&gt;&lt;p&gt;听上去是个好主意。但问题在于，哪里来的这么多卡呢？这通常需要牺牲其他的并行度。除此之外还有个问题，即更大规模的扩展可能导致意料之外的网络性能的急剧恶化（扩展出了某个local域），产生很麻烦的额外调优需求。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #11 监督微调 Supervised Fine-Tuning, SFT</title><link>https://Koas-W.github.io/posts/20260518-sft/</link><pubDate>Tue, 19 May 2026 00:03:25 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260518-sft/</guid><description>&lt;p&gt;这是一个相对较小的更新工作量。虽然是minor的feature，但SFT的数据划分模式还是值得总结一下的，毕竟俗话说的好，魔鬼藏在细节中嘛。&lt;/p&gt;
+&lt;/h3&gt;&lt;p&gt;听上去是个好主意。但问题在于，哪里来的这么多卡呢？这通常需要牺牲其他的并行度。除此之外还有个问题，即更大规模的扩展可能导致意料之外的网络性能的急剧恶化（扩展出了某个local域），产生很麻烦的额外调优需求。&lt;/p&gt;
+&lt;p&gt;总的来说，这个方向没有什么特别的银弹。ZeRO这种细粒度的切分和重叠可以最大限度的消除bubbles，但代价是工程复杂度和可能的更大内存峰值（ZB-H2），同样是trade-off。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #11 监督微调 Supervised Fine-Tuning, SFT</title><link>https://Koas-W.github.io/posts/20260518-sft/</link><pubDate>Tue, 19 May 2026 00:03:25 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260518-sft/</guid><description>&lt;p&gt;这是一个相对较小的更新工作量。虽然是minor的feature，但SFT的数据划分模式还是值得总结一下的，毕竟俗话说的好，魔鬼藏在细节中嘛。&lt;/p&gt;
 &lt;p&gt;当然，这篇不会很长就是了。&lt;/p&gt;
 &lt;h2 id="sft和预训练的区别"&gt;SFT和预训练的区别
 &lt;/h2&gt;&lt;h3 id="数据格式"&gt;数据格式
