@@ -1,4 +1,35 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>预训练 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/</link><description>Recent content in 预训练 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Tue, 19 May 2026 00:03:25 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #11 监督微调 Supervised Fine-Tuning, SFT</title><link>https://Koas-W.github.io/posts/20260518-sft/</link><pubDate>Tue, 19 May 2026 00:03:25 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260518-sft/</guid><description>&lt;p&gt;这是一个相对较小的更新工作量。虽然是minor的feature，但SFT的数据划分模式还是值得总结一下的，毕竟俗话说的好，魔鬼藏在细节中嘛。&lt;/p&gt;
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>预训练 on Fain的Blog</title><link>https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/</link><description>Recent content in 预训练 on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Sat, 23 May 2026 10:07:59 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/%E9%A2%84%E8%AE%AD%E7%BB%83/index.xml" rel="self" type="application/rss+xml"/><item><title>Femtotron开发日志 #12 Interleaved 1F1B</title><link>https://Koas-W.github.io/posts/20260523interleaved1f1b/</link><pubDate>Sat, 23 May 2026 10:07:59 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260523interleaved1f1b/</guid><description>&lt;p&gt;这次更新的部分是Interleaved 1F1B。它的思想本身比较简单，实现起来也没有特别值得一提的新困难之处，因此博客本身也会比较简单。这里记录一下它的主要思想，分析一下它的主要理论上（纸面）的性能情况，另外也和其他一些可比方案进行简单的比较。&lt;/p&gt;
+&lt;h2 id="interleaved-1f1b和1f1b的区别"&gt;Interleaved 1F1B和1F1B的区别
+&lt;/h2&gt;&lt;p&gt;Interleaved 1F1B，顾名思义是基于基线1F1B发展出来的调度策略。它发展出的目的是降低1F1B的流水线空泡率，准确来说是1F1B在预热阶段的流水线空泡率。它的核心思想可以被理解为一种“GPU-stage的解耦”，或者说“GPU的虚拟化”：在1F1B调度中，每个物理GPU严格对应一个stage，一个batch前向传播过程中经历一次，反向传播过程中经历一次，不会多次访问同一个GPU。&lt;/p&gt;
+&lt;h3 id="实现"&gt;实现
+&lt;/h3&gt;&lt;p&gt;除了工程上的代码变动之外，它的主要实现方法是改变权重加载的方式。例如，一个32层的模型，均匀分配给8个GPU，那么GPU 0在1F1B上会分到4个layer，分别是[0,1,2,3]。在Interleaved 1F1B下，GPU 0仍然会分到4个layer，只不过会变成[0,1,16,17]，或者更激进的[0,8,16,24]（这种在实践中很少见，通常是切分成两个虚拟GPU阶段）。这样，同一批数据会从GPU 0到GPU 1到GPU 2...再回到GPU 0，把整个循环重走V次，V就是虚拟流水线并行度（Virtual Pipeline Parallel Size）。在上面的例子里，[0,1,16,17]对应V=2，[0,8,16,24]对应V=4。每个物理GPU 被&amp;quot;虚拟化&amp;quot;成V个逻辑stage，因此一个micro-batch完成一次完整的前向需要在物理GPU环上转V圈，总共经过P·V个虚拟stage。&lt;/p&gt;
+&lt;h2 id="理论性能分析"&gt;理论性能分析
+&lt;/h2&gt;&lt;h3 id="性能改进之处"&gt;性能改进之处
+&lt;/h3&gt;&lt;p&gt;我们可以进行理论建模来对它的空泡率、启动、稳定和尾声三个阶段的长度进行分析。&lt;/p&gt;
+&lt;p&gt;记单个micro-batch的前向时间为 $t_f$，反向时间为 $t_b$。P = pipeline stage 数，M = micro-batch 数，V = 虚拟流水线并行度。&lt;/p&gt;
+&lt;p&gt;基线1F1B：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;启动（warmup）：$(P−1)·t_f$&lt;/li&gt;
+&lt;li&gt;稳定（steady）：$M·(t_f + t_b)$&lt;/li&gt;
+&lt;li&gt;尾声（cooldown）：$(P−1)·t_b$&lt;/li&gt;
+&lt;li&gt;空泡时间：$(P−1)·(t_f + t_b)$&lt;/li&gt;
+&lt;li&gt;空泡率：$(P−1) / M$&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Interleaved 1F1B：因为每个 GPU 上的layer被切成了V份，单个虚拟stage的计算量变成1/V，对应的&amp;quot;每跳&amp;quot;时间变成t_f/V和t_b/V。而流水线dependency仍然只要求数据穿过P−1跳就可以开始下一步，所以：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;空泡时间：$(P−1)·(t_f + t_b) / V$&lt;/li&gt;
+&lt;li&gt;空泡率：$(P−1) / (V·M)$&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;即空泡率被压缩到基线的$1/V$。直观地理解，把同样的工作切成更细的颗粒投喂到流水线上，warmup 期间&amp;quot;在路上&amp;quot;的数据更多，空闲的格子更少。&lt;/p&gt;
+&lt;h3 id="牺牲的性能"&gt;牺牲的性能
+&lt;/h3&gt;&lt;p&gt;这种空泡改进当然是有代价的，主要分为两个方面：&lt;/p&gt;
+&lt;p&gt;1、通信量翻了V倍。在基线1F1B中，一个micro-batch只在相邻GPU间传递P−1次激活；而在Interleaved 1F1B中，由于同一批数据要在物理GPU环上循环V圈，每对相邻GPU之间的P2P通信次数变成原来的V倍。这也是为什么Interleaved 1F1B几乎只在有NVLink/NVSwitch 的节点内使用（实际上这一点反而和TP相似，而不是PP），因为如果使用跨节点的IB网络或者RoCE的话，通信带宽就会快速饱和，因此很容易盖过它省下来的那点空泡。&lt;/p&gt;
+&lt;p&gt;2、需要更多的micro-batch-num以充分填充预热阶段。这是因为Interleaved 1F1B本质上是在不增加GPU数量和不牺牲其他并行度的情况下增加流水线深度，而深流水线自然意味着需要更多micro-batch-num才能充分填充预热。理论上来说，大致需要V·P−1量级的micro-batch同时在流水线里运转，才能让稳定阶段真正开始。如果M偏小（比如M&amp;lt;1.2*V·P），稳定阶段的占比就会被压得很小，空泡红利吃不到多少，但V倍的额外通信却完全不变，可能会导致得不偿失。所以Interleaved 1F1B只在M足够大时才是赚的，这一点在调参时也需要特别注意。&lt;/p&gt;
+&lt;h2 id="其他的一些可比方案"&gt;其他的一些可比方案
+&lt;/h2&gt;&lt;h3 id="减少micro-batch-size增加micro-batch-num的方案"&gt;减少micro-batch-size，增加micro-batch-num的方案
+&lt;/h3&gt;&lt;p&gt;这是一个数学上几乎等价的方案。可以在保持global batch size不变的前提下，把单个micro-batch切小，从而抬高M，让(P−1)/M同样趋近于 0。它的好处是完全不增加通信量，但坏处是单卡的计算强度（arithmetic intensity）下降。如果计算强度过低、GEMM等性能核心操作进入了Memory-bound区间，那么收益就不再是线性的了，这会导致总端到端MFU反而变差，那就得不偿失了。每个micro-batch都有一份固定overhead（kernel launch、通信 setup、optimizer 相关的元数据等），因此实际上micro-batch-num更多和Interleaved 1F1B的V同时进行调整，而不是作为两个相对独立的优化方法。&lt;/p&gt;
+&lt;h3 id="增加pipeline-stage数量的方案"&gt;增加Pipeline Stage数量的方案
+&lt;/h3&gt;&lt;p&gt;听上去是个好主意。但问题在于，哪里来的这么多卡呢？这通常需要牺牲其他的并行度。除此之外还有个问题，即更大规模的扩展可能导致意料之外的网络性能的急剧恶化（扩展出了某个local域），产生很麻烦的额外调优需求。&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #11 监督微调 Supervised Fine-Tuning, SFT</title><link>https://Koas-W.github.io/posts/20260518-sft/</link><pubDate>Tue, 19 May 2026 00:03:25 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260518-sft/</guid><description>&lt;p&gt;这是一个相对较小的更新工作量。虽然是minor的feature，但SFT的数据划分模式还是值得总结一下的，毕竟俗话说的好，魔鬼藏在细节中嘛。&lt;/p&gt;
 &lt;p&gt;当然，这篇不会很长就是了。&lt;/p&gt;
 &lt;h2 id="sft和预训练的区别"&gt;SFT和预训练的区别
 &lt;/h2&gt;&lt;h3 id="数据格式"&gt;数据格式
