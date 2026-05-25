@@ -1,7 +1,170 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>VLLM on Fain的Blog</title><link>https://Koas-W.github.io/tags/vllm/</link><description>Recent content in VLLM on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Mon, 25 May 2026 17:45:57 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/vllm/index.xml" rel="self" type="application/rss+xml"/><item><title>Pico-vLLM开发日志 #15 序列内并行的Attention算子优化：Flash Decode方案</title><link>https://Koas-W.github.io/posts/20260525-flashdecode/</link><pubDate>Mon, 25 May 2026 17:45:57 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260525-flashdecode/</guid><description>&lt;p&gt;今天是久违的Pico-vLLM开发环节（真是阔别已久啊），原因是最近搞到了能够在一段时间内可靠使用的h200x8集群。在上面进行了一些Profiling之后，惊讶的发现Pico-vLLM比起vLLM居然在h200单卡上性能差很多，甚至能差50%以上。在经过性能分析之后，发现主要是之前的短Prompt和短Decoding step总量/在5070卡上的测试中，原本不是瓶颈的Attention Kernel变成了新的瓶颈，甚至把整个Decode step/Prefill step。&lt;/p&gt;
-&lt;h2 id="profiling结果"&gt;Profiling结果
-&lt;/h2&gt;&lt;h2 id="之前的实现有什么问题"&gt;之前的实现有什么问题
-&lt;/h2&gt;&lt;h2 id="新实现的样子"&gt;新实现的样子
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>VLLM on Fain的Blog</title><link>https://Koas-W.github.io/tags/vllm/</link><description>Recent content in VLLM on Fain的Blog</description><generator>Hugo -- gohugo.io</generator><language>zh-cn</language><lastBuildDate>Mon, 25 May 2026 17:45:57 +0800</lastBuildDate><atom:link href="https://Koas-W.github.io/tags/vllm/index.xml" rel="self" type="application/rss+xml"/><item><title>Pico-vLLM开发日志 #15 序列内并行的Attention算子优化：Flash Decode方案</title><link>https://Koas-W.github.io/posts/20260525-flashdecode/</link><pubDate>Mon, 25 May 2026 17:45:57 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260525-flashdecode/</guid><description>&lt;p&gt;今天是久违的Pico-vLLM开发环节（真是阔别已久啊），原因是最近搞到了能够在一段时间内可靠使用的h200x8集群。在上面进行了一些Profiling之后，惊讶的发现Pico-vLLM比起vLLM居然在h200单卡上性能差很多，甚至能差50%以上。在经过性能分析之后，发现主要是之前的短Prompt和短Decoding step总量/在5070卡上的测试中，原本不是瓶颈的Attention Kernel变成了新的瓶颈，甚至把整个Decode step/Prefill step的性能拖累了5~10倍。&lt;/p&gt;
+&lt;p&gt;这个问题在之前的5070上没有暴露出来，因此就一直没有改进。但在现在的h200机器上，在类似的配置下就暴露的很明显。这实际上是多种因素共同作用的结果，而且这个差距和卡是消费型/计算型有很大的关系。下面详细分析。&lt;/p&gt;
+&lt;h2 id="profiling结果和现象解释"&gt;Profiling结果和现象解释
+&lt;/h2&gt;&lt;p&gt;在之前的博客当中，我们已经进行过Pico-vLLM的整体性能优化，测得了完整的Profiling结果。为了防止大家忘记，当时的表格是这样的：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;Kernel 时间占比 实例数 单步耗时
+──────────────────────────────────────────────────────────────
+GEMM (gemvx, 主) 63.1% 1700 ~6.8ms
+GEMM (gemvx, 次) 22.2% 560 ~2.4ms
+cutlass WMMA (gate_up fused) 5.4% 560 ~0.6ms
+RMSNorm elementwise 2.0% 3380 ~0.2ms
+BinaryFunctor (residual add) 1.0% 1700 ~0.1ms
+CUDAFunctor_add 0.9% 2240 ~0.1ms
+Decode_Paged_GQAAttention 0.9% 560 ~0.1ms
+RMSNorm reduce 0.9% 1140 ~0.1ms
+CatArrayBatchedCopy 0.8% 1120 ~0.08ms
+store_kvcache_kernel 0.2% 560 ~0.02ms
+──────────────────────────────────────────────────────────────
+GPU 总时间（20步） ~214ms 单步 ~10.7ms
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;当时的结论是，Attention根本啥都不是（只有0.9%），因此Kernel Fusion带来的效果才是最明显的，应该优先做这一类，而Attention做了用处也不大。实际上，在不同length的5070测试情况下，这个论断几乎都是成立的，实测占比几乎没有超过过3%。因此，我当时把它当成了一个固定结论，来作为Profiling的最终结果。当然，事实证明它不是固定结论，至少在更换了GPU之后不一定成立。&lt;/p&gt;
+&lt;p&gt;然后我们来看在h200单卡上的Profiling结果：&lt;/p&gt;
+&lt;pre tabindex="0"&gt;&lt;code&gt;| Time (%) | Total Time (ns) | Instances | Avg (ns) | Med (ns) | Min (ns) | Max (ns) | StdDev (ns) | Name |
++----------+-----------------+-----------+----------+----------+----------+----------+-------------+------------------------------------------------------------------------------------------------------+
+| 79.6 | 120599594 | 560 | 215356.4 | 215408.0 | 210656 | 220288 | 1671.5 | Decode_Paged_GQAAttention_Kernel |
+| 6.4 | 9757298 | 560 | 17423.7 | 17344.0 | 16703 | 20096 | 340.3 | nvjet_tst_192x8_64x8_4x1_v_bz_TNT |
+| 3.7 | 5626849 | 560 | 10047.9 | 10048.0 | 9280 | 11456 | 365.8 | nvjet_tst_64x8_64x16_4x1_v_bz_splitK_TNT |
+| 2.4 | 3636096 | 560 | 6493.0 | 6496.0 | 6080 | 6880 | 124.9 | nvjet_tst_16x64_64x16_4x1_v_bz_TNN |
+| 1.9 | 2863200 | 560 | 5112.9 | 5088.0 | 4832 | 6112 | 174.6 | nvjet_tst_64x8_64x16_4x1_v_badd_TNT |
+| 1.5 | 2215232 | 20 | 110761.6 | 110608.0 | 110336 | 111648 | 361.5 | nvjet_tst_384x8_64x4_2x1_v_bz_TNT |
+| 1.3 | 1959873 | 1140 | 1719.2 | 1696.0 | 1472 | 2112 | 108.9 | _rmsnorm_kernel |
+| 1.1 | 1601344 | 1120 | 1429.8 | 1408.0 | 1248 | 2336 | 108.6 | void at::native::vectorized_elementwise_kernel&amp;lt;(int)8, at::native::CUDAFunctor_add&amp;lt;c10::BFloat16&amp;gt;, … |
+| 0.8 | 1279808 | 560 | 2285.4 | 2272.0 | 2112 | 3104 | 141.6 | _fused_decode_rope_and_cache_kernel |
+| 0.6 | 908192 | 560 | 1621.8 | 1600.0 | 1568 | 1792 | 32.1 | void cublasLt::splitKreduce_kernel&amp;lt;(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat1… |
+| 0.5 | 771380 | 560 | 1377.5 | 1375.0 | 1248 | 2240 | 90.5 | _fused_swiglu_kernel |
+| 0.1 | 191552 | 20 | 9577.6 | 9584.0 | 9216 | 10272 | 271.0 | void at::native::reduce_kernel&amp;lt;(int)512, (int)1, at::native::ReduceOp&amp;lt;c10::BFloat16, at::native::Ar… |
+| 0.1 | 96736 | 40 | 2418.4 | 2432.0 | 2016 | 2752 | 222.4 | void at::native::index_elementwise_kernel&amp;lt;(int)128, (int)4, void at::native::gpu_index_kernel&amp;lt;void … |
+| 0.0 | 52160 | 20 | 2608.0 | 2544.0 | 2400 | 2944 | 167.9 | void at::native::&amp;lt;unnamed&amp;gt;::indexSelectSmallIndex&amp;lt;c10::BFloat16, long, unsigned int, (int)2, (int)2… |
+| 0.0 | 23904 | 20 | 1195.2 | 1232.0 | 1056 | 1344 | 103.4 | void at::native::vectorized_elementwise_kernel&amp;lt;(int)4, at::native::FillFunctor&amp;lt;int&amp;gt;, std::array&amp;lt;cha… |
++----------+-----------------+-----------+----------+----------+----------+----------+-------------+------------------------------------------------------------------------------------------------------+
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;聚合改写成人能看懂的表格形式：&lt;/p&gt;
+&lt;table&gt;
+ &lt;thead&gt;
+ &lt;tr&gt;
+ &lt;th style="text-align: left"&gt;kernel&lt;/th&gt;
+ &lt;th style="text-align: left"&gt;占比&lt;/th&gt;
+ &lt;th style="text-align: left"&gt;每实例&lt;/th&gt;
+ &lt;th style="text-align: left"&gt;每步合计(×28 层)&lt;/th&gt;
+ &lt;/tr&gt;
+ &lt;/thead&gt;
+ &lt;tbody&gt;
+ &lt;tr&gt;
+ &lt;td style="text-align: left"&gt;&lt;strong&gt;Decode_Paged_GQAAttention_Kernel&lt;/strong&gt;&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;&lt;strong&gt;79.6%&lt;/strong&gt;&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;&lt;strong&gt;215 µs&lt;/strong&gt;&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;&lt;strong&gt;6.0 ms&lt;/strong&gt;&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td style="text-align: left"&gt;各 cuBLAS GEMM(合计)&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;~16.5%&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;—&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;~1.25 ms&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td style="text-align: left"&gt;rmsnorm / 残差 / rope / swiglu / 其他&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;~4%&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;—&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;~0.16 ms&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td style="text-align: left"&gt;总 GPU&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;100%&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;&lt;/td&gt;
+ &lt;td style="text-align: left"&gt;~7.4 ms&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;完全不一样了。GEMM（那一堆nvjet）基本上退居了绝对的次要地位，所有零零散散的dispatch的Kernel加起来也才占据了20%不到的时间占比。然而，Decode_Paged_GQAAttention_Kernel这一个Kernel却单独占比了足足80%。这和5070的情况可以说是截然相反的。也因此，原本和vllm持平的性能，在h200上只有vllm的50%，甚至更低，在极端情况下可以达到只有40%或者35%。&lt;/p&gt;
+&lt;h3 id="分析和解释"&gt;分析和解释
+&lt;/h3&gt;&lt;p&gt;这么大的相对性能差距显然是存在某种系统性因素的，而且很可能不止一个。实际上，笔者本人认为至少从三个角度来解释这个问题。和所有的性能分析模型一样，最主要的因素仍然是&lt;strong&gt;显存带宽&lt;/strong&gt;和&lt;strong&gt;计算能力&lt;/strong&gt;，此外还有一个原本在消费级硬件上不是很明显，但在这个配置下变得不可忽略的角度，&lt;strong&gt;并发度&lt;/strong&gt;。在模型完全相同、计算的带宽需求和算力需求完全相同的情况下，实际上是硬件的这两者的不同规格造成了这个差异。&lt;/p&gt;
+&lt;p&gt;首先列出5070 Laptop和h200的纸面性能的规格差异：&lt;/p&gt;
+&lt;table&gt;
+ &lt;thead&gt;
+ &lt;tr&gt;
+ &lt;th&gt;项目&lt;/th&gt;
+ &lt;th&gt;RTX 5070 Laptop (8GB)&lt;/th&gt;
+ &lt;th&gt;H200 SXM&lt;/th&gt;
+ &lt;th&gt;H200 / 5070L&lt;/th&gt;
+ &lt;/tr&gt;
+ &lt;/thead&gt;
+ &lt;tbody&gt;
+ &lt;tr&gt;
+ &lt;td&gt;架构&lt;/td&gt;
+ &lt;td&gt;Blackwell (5th-gen Tensor Core)&lt;/td&gt;
+ &lt;td&gt;Hopper (4th-gen Tensor Core)&lt;/td&gt;
+ &lt;td&gt;—&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;GPU die&lt;/td&gt;
+ &lt;td&gt;GB206&lt;/td&gt;
+ &lt;td&gt;GH100&lt;/td&gt;
+ &lt;td&gt;—&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;SM 数&lt;/td&gt;
+ &lt;td&gt;&lt;strong&gt;36&lt;/strong&gt;&lt;/td&gt;
+ &lt;td&gt;&lt;strong&gt;132&lt;/strong&gt;&lt;/td&gt;
+ &lt;td&gt;~3.67×&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;CUDA cores&lt;/td&gt;
+ &lt;td&gt;4,608&lt;/td&gt;
+ &lt;td&gt;16,896&lt;/td&gt;
+ &lt;td&gt;~3.67×&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;Boost clock&lt;/td&gt;
+ &lt;td&gt;~2.35 GHz&lt;/td&gt;
+ &lt;td&gt;~1.98 GHz&lt;/td&gt;
+ &lt;td&gt;—&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;BF16/FP16 Tensor (dense, FP32 acc)&lt;/td&gt;
+ &lt;td&gt;~46 TFLOPS&lt;/td&gt;
+ &lt;td&gt;&lt;strong&gt;~989 TFLOPS&lt;/strong&gt;&lt;/td&gt;
+ &lt;td&gt;~21×&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;BF16/FP16 Tensor (dense, FP16 acc)&lt;/td&gt;
+ &lt;td&gt;~93 TFLOPS&lt;/td&gt;
+ &lt;td&gt;~989 TFLOPS&lt;/td&gt;
+ &lt;td&gt;~10.6×&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;BF16/FP16 Tensor (2:4 稀疏)&lt;/td&gt;
+ &lt;td&gt;~93 / ~186 TFLOPS&lt;/td&gt;
+ &lt;td&gt;&lt;strong&gt;~1,979 TFLOPS&lt;/strong&gt;&lt;/td&gt;
+ &lt;td&gt;~10.6× / ~21×&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;显存&lt;/td&gt;
+ &lt;td&gt;8 GB GDDR7&lt;/td&gt;
+ &lt;td&gt;141 GB HBM3e&lt;/td&gt;
+ &lt;td&gt;~17.6×&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;显存位宽&lt;/td&gt;
+ &lt;td&gt;128-bit&lt;/td&gt;
+ &lt;td&gt;6,144-bit (6 × 1024)&lt;/td&gt;
+ &lt;td&gt;—&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;tr&gt;
+ &lt;td&gt;显存带宽&lt;/td&gt;
+ &lt;td&gt;~512 GB/s&lt;/td&gt;
+ &lt;td&gt;&lt;strong&gt;4.8 TB/s&lt;/strong&gt;&lt;/td&gt;
+ &lt;td&gt;~9.4×&lt;/td&gt;
+ &lt;/tr&gt;
+ &lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;然后我们来慢慢分析。&lt;/p&gt;
+&lt;h4 id="显存带宽和计算能力ridge-point位置"&gt;显存带宽和计算能力（Ridge Point位置）
+&lt;/h4&gt;&lt;p&gt;这是最明显的区别所在。从表格里可以看到，对于纯BF16/FP16来说，H200的算力是5070 Laptop的21倍，而显存带宽却只有9.4倍。从Roofline模型里可以知道，这就意味着整个h200硬件的Ridge Point（理论上的最优硬件性能利用点）向右偏移了一倍：同样算术强度的程序，在5070上可能是compute bound，在h200上可能就是Memory bound了。而这又进一步意味着在5070上可以被计算给overlap进而掩盖&lt;/p&gt;
+&lt;h4 id="并发度"&gt;并发度
+&lt;/h4&gt;&lt;p&gt;2x偏移的ridge point可以部分的解释Pico-vLLM和vllm的端到端性能的影响，但其实并不能完全解释Attention算子对整个端到端性能差异的影响：毕竟Attention算子本身的性能差异达到了大约10倍甚至更多，如果仅仅是最优算术强度有偏差，无论如何也应该是大约2x的差距，而不是10x。&lt;/p&gt;
+&lt;p&gt;这部分的影响则是并发度带来的。它的根本原因在于，原本的计算实现没有提供足够多的CTA，而vllm的Flash Decode实现却可以。&lt;/p&gt;
+&lt;h2 id="之前的实现的分析"&gt;之前的实现的分析
+&lt;/h2&gt;&lt;h3 id="坏处"&gt;坏处
+&lt;/h3&gt;&lt;h3 id="好处"&gt;好处
+&lt;/h3&gt;&lt;h2 id="flash-decode的设计模式"&gt;Flash Decode的设计模式
 &lt;/h2&gt;</description></item><item><title>Pico-vLLM 开发日志 #14 Prefix Caching</title><link>https://Koas-W.github.io/posts/20260417-prefixcaching/</link><pubDate>Sat, 18 Apr 2026 21:56:39 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260417-prefixcaching/</guid><description>&lt;p&gt;“如果你想体验极致的数学规整美感和爽感，就去实现Paged Attention；如果你想体验抽象分层设计原则和一致性维持的究极长痛，去实现Prefix Caching。”&lt;/p&gt;
 &lt;p&gt;​																							——我自己&lt;/p&gt;
 &lt;p&gt;======================================================================&lt;/p&gt;
