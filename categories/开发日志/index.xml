@@ -171,12 +171,13 @@ GPU 总时间（20步） ~214ms 单步 ~10.7ms
 &lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
 &lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
 &lt;/div&gt;
-&lt;/div&gt;&lt;p&gt;正&lt;/p&gt;
+&lt;/div&gt;&lt;p&gt;正如同刚刚的分析所说，它的最大问题有两个：一个是并发度极其有限，另一个是在GQA模式下的重复访存。下文会详细说。&lt;/p&gt;
 &lt;h2 id="flash-decode的设计模式"&gt;Flash Decode的设计模式
 &lt;/h2&gt;&lt;p&gt;Flash Decode的核心就在于挖掘并发度，实际上是一个面向低并发、小batch或者单batch的推理加速方法。对于非常大的Batch来说这通常不会有明显效果（因为都是利用满了整个硬件资源，但Flash Decode还多了个额外的reduction操作），但是对于大多数Batch达不到大规模生产级别的场景来说就有明显的意义了。&lt;/p&gt;
 &lt;p&gt;具体来说，它通过增加一个在KV序列维度上的均匀切分&lt;code&gt;num_splits&lt;/code&gt;（KV 切分数）来挖掘额外的并行度。每个切分的段内先如同其他段不存在一样执行完整的Flash Attention算法流程，然后所有得到的结果再通过一次额外的规约Reduction来得到最终的全局结果。这个思想本身很简单，但要完整的实现一遍还是挺麻烦的，需要写两个Kernel，或者用更加麻烦的原子操作来实现最终的全局规约。&lt;/p&gt;
 &lt;p&gt;此外，还有一个在GQA中必须进行的设计改动。在之前的经典Flash Attention实现当中，我们会launch一个每个block对每个“逻辑head”进行计算的Kernel。它在逻辑上是正确的，然而也是低效的。它低效的原因在于会把在GQA中被复用的K/V head重复读取，重复次数和KV group size完全相等，或者说等于Q head num/KV head num。这构成了另一个性能下降的原因。&lt;/p&gt;
-&lt;p&gt;对于5070来说，由于Blackwell架构，其先进、低延迟的L2缓存往往可以部分甚至相当程度上抵消这个问题，从而让这个问题部分地被掩盖。这也相当程度上贡献了Pico-vLLM和vllm在5070上的性能的追平点。&lt;/p&gt;
+&lt;p&gt;对于5070来说，由于Blackwell架构，其先进、低延迟的L2缓存往往可以部分甚至相当程度上抵消这个问题，从而让这个问题部分地被掩盖。这也相当程度上贡献了Pico-vLLM和vllm在5070上的性能的追平点。但对于h200而言，这个问题会因为较小的L2和较大的L2延迟而体现的更加显著。因此，需要新增一个额外的“head 打包”操作，也即把每个Q head的GEMV变成每个K/V head的，最后一个维度size=group_size的GEMM。如此做，即可让整个操作等效于q_len=group_size而不是q_len=1，从而节省访存、提高算术强度。&lt;/p&gt;
+&lt;p&gt;不过同时也需要说明的是，它实际上是有代价的，因为它实际上会把grid的配置从[batch_size, Q head, num_splits]=[1, 12, num_splits]变成[batch_size, KV head, num_splits]=[1, 2, num_splits]，因此减少了并发度。不过，既然num_splits同时可以提高并发度，这个问题一般是可以被完全弥补的，因为在最后分段结果上reduction的代价比重复访存的代价还是要小多了。&lt;/p&gt;
 &lt;p&gt;它的源代码大约如下：&lt;/p&gt;
 &lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
 &lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
