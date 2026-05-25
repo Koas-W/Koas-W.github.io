@@ -162,14 +162,216 @@ GPU 总时间（20步） ~214ms 单步 ~10.7ms
 &lt;/h4&gt;&lt;p&gt;2x偏移的ridge point可以部分的解释Pico-vLLM和vllm的端到端性能的影响，但其实并不能完全解释Attention算子对整个端到端性能差异的影响：毕竟Attention算子本身的性能差异达到了大约10倍甚至更多，如果仅仅是最优算术强度有偏差，无论如何也应该是大约2x的差距，而不是10x。&lt;/p&gt;
 &lt;p&gt;这部分额外的影响则是并发度和硬件SM数量的不匹配带来的。它的根本原因在于，原本的计算实现没有提供足够多的CTA，而vllm的Flash Decode实现却可以。这一点在5070 Laptop上体现的并不明显：正如前面的规格参数所示，5070 Laptop只有36个SM，而h200却有足足132个。在h200上，原本并发度不足的劣势就被拉的淋漓尽致了。&lt;/p&gt;
 &lt;p&gt;以我们使用的案例为例，我们有12个Q head，2个KV head。因此，我们launch的Kernel的grid形状就是：[batch_size, Q head]=[1, 12]。也就是说，无论如何，我们总是只能使用固定的12个SM进行运算。而对于vllm来说，一般对于不同情况可以直接用满所有的SM。&lt;/p&gt;
-&lt;p&gt;这个数字一算出来，结果就很明了了。对于5070 Laptop来说，我们的Pico-vLLM只能利用其33%（1/3）的性能，而vllm大约是100%。对于h200来说情况就差距更大了：Pico-vLLM只能利用其9.1%（1/11）的性能，而vllm是100%。这就带来了3倍的相对差异，因此解释了性能差别中的大部分。因此，这个性能问题最主要和最根本的问题是并发度问题。要解决这个问题就需要发掘其他地方的潜在并发度。实际上，Flash Decode最初的提出也是因为相同的原因而产生的。&lt;/p&gt;
+&lt;p&gt;这个数字一算出来，结果就很明了了。对于5070 Laptop来说，我们的Pico-vLLM只能利用其33%（1/3=12/36）的性能，而vllm大约是100%。对于h200来说情况就差距更大了：Pico-vLLM只能利用其9.1%（1/11=12/132）的性能，而vllm仍然是100%。这就带来了3倍的相对差异扩大，因此解释了性能差别中的大部分。也正因此，这个性能问题其实最主要和最根本的问题反而是并发度问题，而不是算术强度等等的问题。要解决这个问题就需要发掘其他地方的潜在并发度。实际上，Flash Decode最初的提出也是因为相同的原因而产生的。&lt;/p&gt;
 &lt;h2 id="之前的实现"&gt;之前的实现
 &lt;/h2&gt;&lt;p&gt;之前的代码如下：&lt;/p&gt;
 &lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
 &lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
-&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 13
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 14
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 15
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 16
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 17
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 18
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 19
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 20
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 21
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 22
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 23
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 24
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 25
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 26
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 27
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 28
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 29
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 30
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 31
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 32
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 33
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 34
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 35
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 36
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 37
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 38
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 39
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 40
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 41
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 42
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 43
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 44
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 45
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 46
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 47
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 48
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 49
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 50
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 51
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 52
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 53
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 54
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 55
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 56
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 57
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 58
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 59
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 60
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 61
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 62
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 63
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 64
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 65
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 66
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 67
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 68
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 69
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 70
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 71
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 72
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 73
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 74
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 75
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 76
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 77
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 78
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 79
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 80
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 81
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 82
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 83
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 84
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 85
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 86
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 87
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 88
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 89
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 90
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 91
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 92
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 93
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 94
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 95
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 96
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 97
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 98
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 99
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;100
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;101
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
 &lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
-&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;@triton.jit&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;Decode_Paged_GQAAttention_Kernel&lt;/span&gt;(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; q , &lt;span style="color:#75715e"&gt;# (B, n_heads, 1, head_dim) query，decode 每步只有 1 个 token&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; k_cache , &lt;span style="color:#75715e"&gt;# (num_blocks, n_kv_heads, block_size, head_dim) 全局 K cache&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; v_cache , &lt;span style="color:#75715e"&gt;# (num_blocks, n_kv_heads, block_size, head_dim) 全局 V cache&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; block_table , &lt;span style="color:#75715e"&gt;# (B, MAX_BLOCKS_PER_SEQ) int32，每个请求的物理块 id，-1 表示未分配&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; context_lens , &lt;span style="color:#75715e"&gt;# (B,) int32，每个请求当前的有效 token 数&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; scale , &lt;span style="color:#75715e"&gt;# 1.0 / sqrt(head_dim)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; out,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# Meta-parameters&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# 元参数&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; MAX_BLOCKS_PER_SEQ: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr, &lt;span style="color:#75715e"&gt;# 启动时固定，不是运行时变量&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; BLOCK_SIZE: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr, &lt;span style="color:#75715e"&gt;#&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; HEAD_DIM: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr, &lt;span style="color:#75715e"&gt;#&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; N_KV_HEAD: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; N_HEAD: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; ): &lt;span style="color:#75715e"&gt;# (B, n_heads, 1, head_dim)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# grid = (B, n_heads)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# 每个 program 处理一个 (batch, head) 对&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# program_id[0] = batch_idx&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# program_id[1] = head_idx&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pid_batch &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;program_id(axis&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pid_head &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;program_id(axis&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; kv_head_idx &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (pid_head &lt;span style="color:#f92672"&gt;//&lt;/span&gt; (N_HEAD &lt;span style="color:#f92672"&gt;//&lt;/span&gt; N_KV_HEAD))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; m &lt;span style="color:#f92672"&gt;=&lt;/span&gt; float(&lt;span style="color:#e6db74"&gt;&amp;#39;-inf&amp;#39;&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; l &lt;span style="color:#f92672"&gt;=&lt;/span&gt; float(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; o &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;zeros((HEAD_DIM, ), dtype&lt;span style="color:#f92672"&gt;=&lt;/span&gt;tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;float32)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; q_ptrs &lt;span style="color:#f92672"&gt;=&lt;/span&gt; q &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_batch &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (HEAD_DIM &lt;span style="color:#f92672"&gt;*&lt;/span&gt; N_HEAD) &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_head &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (HEAD_DIM) &lt;span style="color:#f92672"&gt;+&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, HEAD_DIM)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; q_vec &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;reshape(tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(q_ptrs), (HEAD_DIM, &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; context_len &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(context_lens &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_batch)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; context_len &lt;span style="color:#f92672"&gt;==&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; max_block_index &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;cdiv(context_len, BLOCK_SIZE) &lt;span style="color:#75715e"&gt;# 向上取整&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; offs_kv &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, BLOCK_SIZE &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; block_idx &lt;span style="color:#f92672"&gt;in&lt;/span&gt; range(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, max_block_index):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; physical_idx &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(block_table &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_batch &lt;span style="color:#f92672"&gt;*&lt;/span&gt; MAX_BLOCKS_PER_SEQ &lt;span style="color:#f92672"&gt;+&lt;/span&gt; block_idx)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; physical_idx &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;maximum(physical_idx, &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)&lt;span style="color:#f92672"&gt;.&lt;/span&gt;to(tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;int64)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; base &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (physical_idx &lt;span style="color:#f92672"&gt;*&lt;/span&gt; N_KV_HEAD &lt;span style="color:#f92672"&gt;*&lt;/span&gt; BLOCK_SIZE &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM &lt;span style="color:#f92672"&gt;+&lt;/span&gt; kv_head_idx&lt;span style="color:#f92672"&gt;*&lt;/span&gt; BLOCK_SIZE &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# 加载时 mask 掉超出 context_len 的 token&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; token_start &lt;span style="color:#f92672"&gt;=&lt;/span&gt; block_idx &lt;span style="color:#f92672"&gt;*&lt;/span&gt; BLOCK_SIZE
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; valid_in_block &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;minimum(BLOCK_SIZE, context_len &lt;span style="color:#f92672"&gt;-&lt;/span&gt; token_start)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; kv_token_mask &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, BLOCK_SIZE &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM) &lt;span style="color:#f92672"&gt;&amp;lt;&lt;/span&gt; valid_in_block &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; k_ptrs &lt;span style="color:#f92672"&gt;=&lt;/span&gt; k_cache &lt;span style="color:#f92672"&gt;+&lt;/span&gt; base &lt;span style="color:#f92672"&gt;+&lt;/span&gt; offs_kv
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# k_block: (block_size, head_dim)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; k_block &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(k_ptrs, mask &lt;span style="color:#f92672"&gt;=&lt;/span&gt; kv_token_mask, other&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;0.0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; k_block &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;reshape(k_block, (BLOCK_SIZE, HEAD_DIM))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; v_ptrs &lt;span style="color:#f92672"&gt;=&lt;/span&gt; v_cache &lt;span style="color:#f92672"&gt;+&lt;/span&gt; base &lt;span style="color:#f92672"&gt;+&lt;/span&gt; offs_kv
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; v_block &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(v_ptrs, mask &lt;span style="color:#f92672"&gt;=&lt;/span&gt; kv_token_mask, other&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;0.0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; v_block &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;reshape(v_block, (BLOCK_SIZE, HEAD_DIM))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# mask 最后一个 block 的无效 token&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; valid &lt;span style="color:#f92672"&gt;=&lt;/span&gt; block_idx &lt;span style="color:#f92672"&gt;*&lt;/span&gt; BLOCK_SIZE &lt;span style="color:#f92672"&gt;+&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, BLOCK_SIZE) &lt;span style="color:#f92672"&gt;&amp;lt;&lt;/span&gt; context_len
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; q_row &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;reshape(q_vec, (&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;, HEAD_DIM)) &lt;span style="color:#75715e"&gt;# (1, HEAD_DIM)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; s &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;sum(k_block &lt;span style="color:#f92672"&gt;*&lt;/span&gt; q_row, axis&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;) &lt;span style="color:#75715e"&gt;# (BLOCK_SIZE,)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; s &lt;span style="color:#f92672"&gt;=&lt;/span&gt; s&lt;span style="color:#f92672"&gt;.&lt;/span&gt;to(tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;float32) &lt;span style="color:#f92672"&gt;*&lt;/span&gt; scale
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; s &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;where(valid, s, float(&lt;span style="color:#e6db74"&gt;&amp;#39;-inf&amp;#39;&lt;/span&gt;))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; m_new &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;maximum(m, tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;max(s))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; alpha &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;exp(m &lt;span style="color:#f92672"&gt;-&lt;/span&gt; m_new) &lt;span style="color:#75715e"&gt;# 旧的缩放因子&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; p &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;exp(s &lt;span style="color:#f92672"&gt;-&lt;/span&gt; m_new) &lt;span style="color:#75715e"&gt;# 当前 block 的权重&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; l &lt;span style="color:#f92672"&gt;=&lt;/span&gt; l &lt;span style="color:#f92672"&gt;*&lt;/span&gt; alpha &lt;span style="color:#f92672"&gt;+&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;sum(p)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; p_col &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;reshape(p, (BLOCK_SIZE, &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;)) &lt;span style="color:#75715e"&gt;# (BLOCK_SIZE, 1)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; o &lt;span style="color:#f92672"&gt;=&lt;/span&gt; o &lt;span style="color:#f92672"&gt;*&lt;/span&gt; alpha &lt;span style="color:#f92672"&gt;+&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;sum(p_col &lt;span style="color:#f92672"&gt;*&lt;/span&gt; v_block, axis&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;) &lt;span style="color:#75715e"&gt;# (HEAD_DIM,)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; m &lt;span style="color:#f92672"&gt;=&lt;/span&gt; m_new
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; o &lt;span style="color:#f92672"&gt;=&lt;/span&gt; o &lt;span style="color:#f92672"&gt;/&lt;/span&gt; l &lt;span style="color:#75715e"&gt;# (HEAD_DIM,)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; o_casted &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;cast(o, out&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dtype&lt;span style="color:#f92672"&gt;.&lt;/span&gt;element_ty)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; 
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;store(out &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_batch &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (HEAD_DIM &lt;span style="color:#f92672"&gt;*&lt;/span&gt; N_HEAD) &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_head &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (HEAD_DIM) &lt;span style="color:#f92672"&gt;+&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, HEAD_DIM), o_casted)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;@torch.compiler.disable&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;paged_decode_attention&lt;/span&gt;(q, k_cache, v_cache, block_table, context_lens,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; MAX_BLOCKS_PER_SEQ, BLOCK_SIZE&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;16&lt;/span&gt;):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; B, N_HEAD, _, HEAD_DIM &lt;span style="color:#f92672"&gt;=&lt;/span&gt; q&lt;span style="color:#f92672"&gt;.&lt;/span&gt;shape
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; N_KV_HEAD &lt;span style="color:#f92672"&gt;=&lt;/span&gt; k_cache&lt;span style="color:#f92672"&gt;.&lt;/span&gt;shape[&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;]
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; scale &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;1.0&lt;/span&gt; &lt;span style="color:#f92672"&gt;/&lt;/span&gt; (HEAD_DIM &lt;span style="color:#f92672"&gt;**&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0.5&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; out &lt;span style="color:#f92672"&gt;=&lt;/span&gt; torch&lt;span style="color:#f92672"&gt;.&lt;/span&gt;empty(B, N_HEAD, &lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;, HEAD_DIM, device&lt;span style="color:#f92672"&gt;=&lt;/span&gt;q&lt;span style="color:#f92672"&gt;.&lt;/span&gt;device, dtype&lt;span style="color:#f92672"&gt;=&lt;/span&gt;q&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dtype)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; grid &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (B, N_HEAD)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; Decode_Paged_GQAAttention_Kernel[grid](
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; q, k_cache, v_cache, block_table, context_lens,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; scale, out,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; MAX_BLOCKS_PER_SEQ&lt;span style="color:#f92672"&gt;=&lt;/span&gt;MAX_BLOCKS_PER_SEQ,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; BLOCK_SIZE&lt;span style="color:#f92672"&gt;=&lt;/span&gt;BLOCK_SIZE,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; HEAD_DIM&lt;span style="color:#f92672"&gt;=&lt;/span&gt;HEAD_DIM,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; N_KV_HEAD&lt;span style="color:#f92672"&gt;=&lt;/span&gt;N_KV_HEAD,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; N_HEAD&lt;span style="color:#f92672"&gt;=&lt;/span&gt;N_HEAD,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; )
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt; out
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
 &lt;/div&gt;
 &lt;/div&gt;&lt;p&gt;正如同刚刚的分析所说，它的最大问题有两个：一个是并发度极其有限，另一个是在GQA模式下的重复访存。下文会详细说。&lt;/p&gt;
 &lt;h2 id="flash-decode的设计模式"&gt;Flash Decode的设计模式
@@ -181,11 +383,255 @@ GPU 总时间（20步） ~214ms 单步 ~10.7ms
 &lt;p&gt;它的源代码大约如下：&lt;/p&gt;
 &lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
 &lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
-&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 2
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 3
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 4
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 5
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 6
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 7
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 8
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 9
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 10
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 11
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 12
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 13
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 14
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 15
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 16
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 17
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 18
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 19
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 20
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 21
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 22
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 23
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 24
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 25
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 26
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 27
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 28
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 29
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 30
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 31
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 32
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 33
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 34
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 35
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 36
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 37
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 38
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 39
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 40
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 41
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 42
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 43
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 44
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 45
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 46
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 47
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 48
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 49
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 50
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 51
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 52
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 53
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 54
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 55
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 56
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 57
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 58
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 59
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 60
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 61
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 62
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 63
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 64
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 65
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 66
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 67
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 68
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 69
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 70
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 71
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 72
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 73
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 74
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 75
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 76
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 77
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 78
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 79
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 80
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 81
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 82
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 83
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 84
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 85
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 86
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 87
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 88
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 89
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 90
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 91
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 92
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 93
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 94
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 95
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 96
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 97
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 98
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 99
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;100
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;101
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;102
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;103
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;104
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;105
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;106
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;107
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;108
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;109
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;110
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;111
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;112
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;113
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;114
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;115
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;116
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;117
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;118
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;119
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;120
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;121
+&lt;/span&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt;122
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
 &lt;td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%"&gt;
-&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code class="language-python" data-lang="python"&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;@triton.jit&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;_flash_decode_partial_kernel&lt;/span&gt;(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; q, &lt;span style="color:#75715e"&gt;# (B, N_HEAD, HEAD_DIM) (decode: the seq=1 dim collapsed)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; k_cache, &lt;span style="color:#75715e"&gt;# (num_blocks, N_KV_HEAD, BLOCK_SIZE, HEAD_DIM)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; v_cache,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; block_table, &lt;span style="color:#75715e"&gt;# (B, MAX_BLOCKS_PER_SEQ) int32&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; context_lens, &lt;span style="color:#75715e"&gt;# (B,) int32&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; scale,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; partial_acc, &lt;span style="color:#75715e"&gt;# (B, N_HEAD, NUM_SPLITS, HEAD_DIM) fp32&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; partial_m, &lt;span style="color:#75715e"&gt;# (B, N_HEAD, NUM_SPLITS) fp32&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; partial_l, &lt;span style="color:#75715e"&gt;# (B, N_HEAD, NUM_SPLITS) fp32&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; MAX_BLOCKS_PER_SEQ: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; BLOCK_SIZE: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; HEAD_DIM: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; N_KV_HEAD: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; N_HEAD: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; GROUP_SIZE: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; PADDED_GROUP: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; NUM_SPLITS: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pid_b &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;program_id(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pid_kv &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;program_id(&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pid_s &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;program_id(&lt;span style="color:#ae81ff"&gt;2&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; ctx &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(context_lens &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_b)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; q_head0 &lt;span style="color:#f92672"&gt;=&lt;/span&gt; pid_kv &lt;span style="color:#f92672"&gt;*&lt;/span&gt; GROUP_SIZE
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; row &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, PADDED_GROUP) &lt;span style="color:#75715e"&gt;# (PG,)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; row_mask &lt;span style="color:#f92672"&gt;=&lt;/span&gt; row &lt;span style="color:#f92672"&gt;&amp;lt;&lt;/span&gt; GROUP_SIZE
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; d &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, HEAD_DIM) &lt;span style="color:#75715e"&gt;# (HD,)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; qheads &lt;span style="color:#f92672"&gt;=&lt;/span&gt; q_head0 &lt;span style="color:#f92672"&gt;+&lt;/span&gt; row &lt;span style="color:#75715e"&gt;# (PG,) absolute q-head ids&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# partial output pointers for this (b, group, split)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pm_ptr &lt;span style="color:#f92672"&gt;=&lt;/span&gt; partial_m &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_b &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (N_HEAD &lt;span style="color:#f92672"&gt;*&lt;/span&gt; NUM_SPLITS) &lt;span style="color:#f92672"&gt;+&lt;/span&gt; qheads &lt;span style="color:#f92672"&gt;*&lt;/span&gt; NUM_SPLITS &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_s
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pl_ptr &lt;span style="color:#f92672"&gt;=&lt;/span&gt; partial_l &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_b &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (N_HEAD &lt;span style="color:#f92672"&gt;*&lt;/span&gt; NUM_SPLITS) &lt;span style="color:#f92672"&gt;+&lt;/span&gt; qheads &lt;span style="color:#f92672"&gt;*&lt;/span&gt; NUM_SPLITS &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_s
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pacc_ptr &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (partial_acc
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_b &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (N_HEAD &lt;span style="color:#f92672"&gt;*&lt;/span&gt; NUM_SPLITS &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;+&lt;/span&gt; qheads[:, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;] &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (NUM_SPLITS &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_s &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;+&lt;/span&gt; d[&lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;, :])
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# online-softmax state (per padded q-head row)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; m_i &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;full((PADDED_GROUP,), float(&lt;span style="color:#e6db74"&gt;&amp;#34;-inf&amp;#34;&lt;/span&gt;), dtype&lt;span style="color:#f92672"&gt;=&lt;/span&gt;tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;float32)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; l_i &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;zeros((PADDED_GROUP,), dtype&lt;span style="color:#f92672"&gt;=&lt;/span&gt;tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;float32)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; acc &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;zeros((PADDED_GROUP, HEAD_DIM), dtype&lt;span style="color:#f92672"&gt;=&lt;/span&gt;tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;float32)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# load Q group: (PG, HD)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; q_ptrs &lt;span style="color:#f92672"&gt;=&lt;/span&gt; q &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_b &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (N_HEAD &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM) &lt;span style="color:#f92672"&gt;+&lt;/span&gt; qheads[:, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;] &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM &lt;span style="color:#f92672"&gt;+&lt;/span&gt; d[&lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;, :]
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; q_tile &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(q_ptrs, mask&lt;span style="color:#f92672"&gt;=&lt;/span&gt;row_mask[:, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;], other&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;0.0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# this split&amp;#39;s block range; empty splits skip the loop and write the&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# sentinel (m=-inf, l=0, acc=0) so the combine step ignores them.&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; total_blocks &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;cdiv(ctx, BLOCK_SIZE)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; blocks_per_split &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;cdiv(total_blocks, NUM_SPLITS)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; start_block &lt;span style="color:#f92672"&gt;=&lt;/span&gt; pid_s &lt;span style="color:#f92672"&gt;*&lt;/span&gt; blocks_per_split
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; end_block &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;minimum(start_block &lt;span style="color:#f92672"&gt;+&lt;/span&gt; blocks_per_split, total_blocks)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; offs &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, BLOCK_SIZE)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;for&lt;/span&gt; blk &lt;span style="color:#f92672"&gt;in&lt;/span&gt; range(start_block, end_block):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; phys &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(block_table &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_b &lt;span style="color:#f92672"&gt;*&lt;/span&gt; MAX_BLOCKS_PER_SEQ &lt;span style="color:#f92672"&gt;+&lt;/span&gt; blk)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; phys &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;maximum(phys, &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)&lt;span style="color:#f92672"&gt;.&lt;/span&gt;to(tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;int64)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; base &lt;span style="color:#f92672"&gt;=&lt;/span&gt; phys &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (N_KV_HEAD &lt;span style="color:#f92672"&gt;*&lt;/span&gt; BLOCK_SIZE &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM) &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_kv &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (BLOCK_SIZE &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; tok_pos &lt;span style="color:#f92672"&gt;=&lt;/span&gt; blk &lt;span style="color:#f92672"&gt;*&lt;/span&gt; BLOCK_SIZE &lt;span style="color:#f92672"&gt;+&lt;/span&gt; offs &lt;span style="color:#75715e"&gt;# (BS,)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; kv_valid &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tok_pos &lt;span style="color:#f92672"&gt;&amp;lt;&lt;/span&gt; ctx
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; kv_ptrs &lt;span style="color:#f92672"&gt;=&lt;/span&gt; base &lt;span style="color:#f92672"&gt;+&lt;/span&gt; offs[:, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;] &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM &lt;span style="color:#f92672"&gt;+&lt;/span&gt; d[&lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;, :] &lt;span style="color:#75715e"&gt;# (BS, HD)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; k_blk &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(k_cache &lt;span style="color:#f92672"&gt;+&lt;/span&gt; kv_ptrs, mask&lt;span style="color:#f92672"&gt;=&lt;/span&gt;kv_valid[:, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;], other&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;0.0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; v_blk &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(v_cache &lt;span style="color:#f92672"&gt;+&lt;/span&gt; kv_ptrs, mask&lt;span style="color:#f92672"&gt;=&lt;/span&gt;kv_valid[:, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;], other&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;0.0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#75715e"&gt;# S = Q @ K^T : (PG, BS)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; s &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dot(q_tile, tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;trans(k_blk))&lt;span style="color:#f92672"&gt;.&lt;/span&gt;to(tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;float32) &lt;span style="color:#f92672"&gt;*&lt;/span&gt; scale
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; s &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;where(kv_valid[&lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;, :], s, float(&lt;span style="color:#e6db74"&gt;&amp;#34;-inf&amp;#34;&lt;/span&gt;))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; m_new &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;maximum(m_i, tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;max(s, axis&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; alpha &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;exp(m_i &lt;span style="color:#f92672"&gt;-&lt;/span&gt; m_new)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; p &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;exp(s &lt;span style="color:#f92672"&gt;-&lt;/span&gt; m_new[:, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;]) &lt;span style="color:#75715e"&gt;# (PG, BS)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; l_i &lt;span style="color:#f92672"&gt;=&lt;/span&gt; l_i &lt;span style="color:#f92672"&gt;*&lt;/span&gt; alpha &lt;span style="color:#f92672"&gt;+&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;sum(p, axis&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; acc &lt;span style="color:#f92672"&gt;=&lt;/span&gt; acc &lt;span style="color:#f92672"&gt;*&lt;/span&gt; alpha[:, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;] &lt;span style="color:#f92672"&gt;+&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dot(p&lt;span style="color:#f92672"&gt;.&lt;/span&gt;to(v_blk&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dtype), v_blk)&lt;span style="color:#f92672"&gt;.&lt;/span&gt;to(tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;float32)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; m_i &lt;span style="color:#f92672"&gt;=&lt;/span&gt; m_new
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;store(pm_ptr, m_i, mask&lt;span style="color:#f92672"&gt;=&lt;/span&gt;row_mask)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;store(pl_ptr, l_i, mask&lt;span style="color:#f92672"&gt;=&lt;/span&gt;row_mask)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;store(pacc_ptr, acc, mask&lt;span style="color:#f92672"&gt;=&lt;/span&gt;row_mask[:, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;])
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#a6e22e"&gt;@triton.jit&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;&lt;span style="color:#66d9ef"&gt;def&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;_flash_decode_combine_kernel&lt;/span&gt;(
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; partial_acc, &lt;span style="color:#75715e"&gt;# (B, N_HEAD, NUM_SPLITS, HEAD_DIM) fp32&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; partial_m, &lt;span style="color:#75715e"&gt;# (B, N_HEAD, NUM_SPLITS) fp32&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; partial_l, &lt;span style="color:#75715e"&gt;# (B, N_HEAD, NUM_SPLITS) fp32&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; context_lens, &lt;span style="color:#75715e"&gt;# (B,) int32&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; out, &lt;span style="color:#75715e"&gt;# (B, N_HEAD, HEAD_DIM)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; HEAD_DIM: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; N_HEAD: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; NUM_SPLITS: tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;constexpr,
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;):
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pid_b &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;program_id(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; pid_h &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;program_id(&lt;span style="color:#ae81ff"&gt;1&lt;/span&gt;)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; d &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, HEAD_DIM)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; out_ptr &lt;span style="color:#f92672"&gt;=&lt;/span&gt; out &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_b &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (N_HEAD &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM) &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_h &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM &lt;span style="color:#f92672"&gt;+&lt;/span&gt; d
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; ctx &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(context_lens &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_b)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;if&lt;/span&gt; ctx &lt;span style="color:#f92672"&gt;==&lt;/span&gt; &lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;store(out_ptr, tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;zeros((HEAD_DIM,), dtype&lt;span style="color:#f92672"&gt;=&lt;/span&gt;out&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dtype&lt;span style="color:#f92672"&gt;.&lt;/span&gt;element_ty))
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#66d9ef"&gt;return&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; s_idx &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;arange(&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;, NUM_SPLITS)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; m_s &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(partial_m &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_b &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (N_HEAD &lt;span style="color:#f92672"&gt;*&lt;/span&gt; NUM_SPLITS) &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_h &lt;span style="color:#f92672"&gt;*&lt;/span&gt; NUM_SPLITS &lt;span style="color:#f92672"&gt;+&lt;/span&gt; s_idx)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; l_s &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(partial_l &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_b &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (N_HEAD &lt;span style="color:#f92672"&gt;*&lt;/span&gt; NUM_SPLITS) &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_h &lt;span style="color:#f92672"&gt;*&lt;/span&gt; NUM_SPLITS &lt;span style="color:#f92672"&gt;+&lt;/span&gt; s_idx)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; acc_ptrs &lt;span style="color:#f92672"&gt;=&lt;/span&gt; (partial_acc
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_b &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (N_HEAD &lt;span style="color:#f92672"&gt;*&lt;/span&gt; NUM_SPLITS &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;+&lt;/span&gt; pid_h &lt;span style="color:#f92672"&gt;*&lt;/span&gt; (NUM_SPLITS &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;+&lt;/span&gt; s_idx[:, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;] &lt;span style="color:#f92672"&gt;*&lt;/span&gt; HEAD_DIM
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; &lt;span style="color:#f92672"&gt;+&lt;/span&gt; d[&lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;, :])
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; acc_s &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;load(acc_ptrs) &lt;span style="color:#75715e"&gt;# (NS, HD)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; m_g &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;max(m_s) &lt;span style="color:#75715e"&gt;# scalar&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; factor &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;exp(m_s &lt;span style="color:#f92672"&gt;-&lt;/span&gt; m_g) &lt;span style="color:#75715e"&gt;# (NS,)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; l_g &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;sum(l_s &lt;span style="color:#f92672"&gt;*&lt;/span&gt; factor)
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; acc_g &lt;span style="color:#f92672"&gt;=&lt;/span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;sum(acc_s &lt;span style="color:#f92672"&gt;*&lt;/span&gt; factor[:, &lt;span style="color:#66d9ef"&gt;None&lt;/span&gt;], axis&lt;span style="color:#f92672"&gt;=&lt;/span&gt;&lt;span style="color:#ae81ff"&gt;0&lt;/span&gt;) &lt;span style="color:#75715e"&gt;# (HD,)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; out_v &lt;span style="color:#f92672"&gt;=&lt;/span&gt; acc_g &lt;span style="color:#f92672"&gt;/&lt;/span&gt; l_g
+&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt; tl&lt;span style="color:#f92672"&gt;.&lt;/span&gt;store(out_ptr, out_v&lt;span style="color:#f92672"&gt;.&lt;/span&gt;to(out&lt;span style="color:#f92672"&gt;.&lt;/span&gt;dtype&lt;span style="color:#f92672"&gt;.&lt;/span&gt;element_ty))
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
 &lt;/div&gt;
-&lt;/div&gt;</description></item><item><title>Femtotron开发日志 #12 Interleaved 1F1B</title><link>https://Koas-W.github.io/posts/20260523interleaved1f1b/</link><pubDate>Sat, 23 May 2026 10:07:59 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260523interleaved1f1b/</guid><description>&lt;p&gt;这次更新的部分是Interleaved 1F1B。它的思想本身比较简单，实现起来也没有特别值得一提的新困难之处，因此博客本身也会比较简单。这里记录一下它的主要思想，分析一下它的主要理论上（纸面）的性能情况，另外也和其他一些可比方案进行简单的比较。&lt;/p&gt;
+&lt;/div&gt;&lt;p&gt;在warpper中按顺序依次调用这两个Kernel，并且相应传参即可。同时不得不感叹，Triton真是大幅度的方便了算子的开发。如果是直写cuda的话，可就不是这寥寥一百行可以解决的工程了。说到这个，要不要在有空的时候好好的调研和学习一下cuTile和CUTLASS呢？&lt;/p&gt;</description></item><item><title>Femtotron开发日志 #12 Interleaved 1F1B</title><link>https://Koas-W.github.io/posts/20260523interleaved1f1b/</link><pubDate>Sat, 23 May 2026 10:07:59 +0800</pubDate><guid>https://Koas-W.github.io/posts/20260523interleaved1f1b/</guid><description>&lt;p&gt;这次更新的部分是Interleaved 1F1B。它的思想本身比较简单，实现起来也没有特别值得一提的新困难之处，因此博客本身也会比较简单。这里记录一下它的主要思想，分析一下它的主要理论上（纸面）的性能情况，另外也和其他一些可比方案进行简单的比较。&lt;/p&gt;
 &lt;h2 id="interleaved-1f1b和1f1b的区别"&gt;Interleaved 1F1B和1F1B的区别
 &lt;/h2&gt;&lt;p&gt;Interleaved 1F1B，顾名思义是基于基线1F1B发展出来的调度策略。它发展出的目的是降低1F1B的流水线空泡率，准确来说是1F1B在预热阶段的流水线空泡率。它的核心思想可以被理解为一种“GPU-stage的解耦”，或者说“GPU的虚拟化”：在1F1B调度中，每个物理GPU严格对应一个stage，一个batch前向传播过程中经历一次，反向传播过程中经历一次，不会多次访问同一个GPU。&lt;/p&gt;
 &lt;h3 id="实现"&gt;实现
