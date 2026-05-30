@@ -24,10 +24,37 @@
 &lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span style="display:flex;"&gt;&lt;span&gt;ptr &lt;span style="color:#f92672"&gt;=&lt;/span&gt; &lt;span style="color:#a6e22e"&gt;nvshmem_malloc&lt;/span&gt;(size);
 &lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
 &lt;/div&gt;
-&lt;/div&gt;&lt;p&gt;可以看到前者是专门的CUDA风格，后者反而和普通的libc的malloc风格一样，因此在代码里看惯了第一种的读者/工程师可能会很不适应。它不能直接使用malloc，因为malloc并没有“对称堆”的“对称”这个语义保证，万一你写了什么if xx malloc else do nothing呢？&lt;/p&gt;
+&lt;/div&gt;&lt;p&gt;可以看到前者是专门的CUDA风格，后者反而和普通的libc的malloc风格一样，因此在代码里看惯了第一种的读者/工程师可能会很不适应。它不能直接使用malloc，因为malloc并没有“对称堆”的“对称”这个语义保证，毕竟万一你写了什么if xx malloc else do nothing呢？&lt;/p&gt;
 &lt;p&gt;此外值得一提的是为什么有这么奇怪的风格差异。这其实是个历史遗留问题，因为它压根不是NVIDIA从零设计的API，而是OpenSHMEM这套标准的一个实现，而OpenSHMEM比CUDA老得多，换句话说血统继承不一样。NVSHMEM前缀虽然挂着nv，但&lt;code&gt;my_pe&lt;/code&gt;、&lt;code&gt;n_pes&lt;/code&gt;、&lt;code&gt;put&lt;/code&gt;、&lt;code&gt;get&lt;/code&gt;、&lt;code&gt;barrier&lt;/code&gt;、&lt;code&gt;malloc&lt;/code&gt;这些名字和语义基本是照搬OpenSHMEM的，再往上能一直追到上世纪90年代Cray的SHMEM。这套API在CUDA出生之前就定型了。所以不是它不想和CUDA统一风格，而是它&amp;quot;不能&amp;quot;；API签名已经是它follow的标准的一部分，单方面改掉的话就不配叫OpenSHMEM实现了。（别让老标准害了你啊.jpg）&lt;/p&gt;
-&lt;p&gt;说它的api设计的很奇怪也是因为这个。如果想对一段代码进行适配NVSHMEM的修改，就不得不改变很多基本性的东西，几乎不可能向后兼容或者无功能性破坏。与之相对的是NCCL的模型，其照常用&lt;code&gt;cudaMalloc&lt;/code&gt;分配tensor，要通信时把需要buffer传入&lt;code&gt;ncclAllReduce&lt;/code&gt;，对于内存模型没有任何侵入性的改动。NVSHMEM则不同，要先整体接受它的内存模型（重构整个分配的代码），然后才能使用它的GPU端通信能力。它的内存模型和通信模型是焊死在一起的。&lt;/p&gt;
-&lt;p&gt;一段典型的NVSHMEM的Helloworld代码如下：&lt;/p&gt;
+&lt;p&gt;说它的api设计的很奇怪也是因为这个。如果想对一段代码进行适配NVSHMEM的修改，就不得不改变很多基本性的东西，几乎不可能向后兼容或者无功能性破坏。与之相对的是NCCL的模型，其照常用&lt;code&gt;cudaMalloc&lt;/code&gt;分配tensor，要通信时把需要buffer传入&lt;code&gt;ncclAllReduce&lt;/code&gt;，对于内存模型没有任何侵入性的改动。NVSHMEM则不同，要先整体接受它的内存模型（重构整个分配的代码），然后才能使用它的GPU端通信能力。它的内存模型和通信模型是焊死在一起的。NVSHMEM本质上还是更接近于把SHMEM那一整套编程模型嫁接到GPU上，从而允许一些老代码方便的对GPU做扩展，反而不是给CUDA runtime本身去做扩展。&lt;/p&gt;
+&lt;h2 id="nvshmem的主要api操作"&gt;NVSHMEM的主要API操作
+&lt;/h2&gt;&lt;p&gt;这方面我无法靠自己完全写出来（我熟悉的就寥寥几个），因此有ai的解释，请读者注意甄别。&lt;/p&gt;
+&lt;p&gt;一、基础设施类&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;初始化与查询：&lt;code&gt;nvshmem_init&lt;/code&gt;/&lt;code&gt;nvshmemx_init_attr&lt;/code&gt;/&lt;code&gt;nvshmem_finalize&lt;/code&gt;，以及&lt;code&gt;nvshmem_my_pe&lt;/code&gt;、&lt;code&gt;nvshmem_n_pes&lt;/code&gt;、版本/名称查询和线程支持（&lt;code&gt;nvshmem_init_thread&lt;/code&gt;/&lt;code&gt;query_thread&lt;/code&gt;）。&lt;/li&gt;
+&lt;li&gt;对称内存管理：&lt;code&gt;nvshmem_malloc&lt;/code&gt;/&lt;code&gt;free&lt;/code&gt;/&lt;code&gt;align&lt;/code&gt;/&lt;code&gt;calloc&lt;/code&gt;——也就是上一节那块焊死的核心；外加&lt;code&gt;nvshmem_ptr&lt;/code&gt;，在peer可直接P2P访问时拿到对方对象的裸指针，从而用普通load/store代替put/get。&lt;/li&gt;
+&lt;li&gt;团队管理：&lt;code&gt;nvshmem_team_split_*&lt;/code&gt;、&lt;code&gt;team_my_pe&lt;/code&gt;/&lt;code&gt;team_n_pes&lt;/code&gt;/&lt;code&gt;team_translate_pe&lt;/code&gt;，以及一组预定义team（如&lt;code&gt;TEAM_WORLD&lt;/code&gt;、&lt;code&gt;TEAMX_NODE&lt;/code&gt;等）。team就是OpenSHMEM里communicator/subgroup的对应物，取代了老的active set。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;二、通信类（数据怎么读写）&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;单边远程读写RMA：put/get两大族——块传输&lt;code&gt;putmem&lt;/code&gt;/&lt;code&gt;getmem&lt;/code&gt;、单元素&lt;code&gt;nvshmem_TYPE_p&lt;/code&gt;/&lt;code&gt;_g&lt;/code&gt;、带步长的&lt;code&gt;iput&lt;/code&gt;/&lt;code&gt;iget&lt;/code&gt;，每种再分阻塞与非阻塞（&lt;code&gt;_nbi&lt;/code&gt;后缀）。这是NVSHMEM的主干。&lt;/li&gt;
+&lt;li&gt;原子操作AMO：&lt;code&gt;atomic_add&lt;/code&gt;/&lt;code&gt;inc&lt;/code&gt;/&lt;code&gt;fetch_add&lt;/code&gt;/&lt;code&gt;fetch_inc&lt;/code&gt;/&lt;code&gt;compare_swap&lt;/code&gt;/&lt;code&gt;swap&lt;/code&gt;/&lt;code&gt;set&lt;/code&gt;/&lt;code&gt;and&lt;/code&gt;/&lt;code&gt;or&lt;/code&gt;/&lt;code&gt;xor&lt;/code&gt;，分取回值和不取回两类，用来在远端做无锁更新。&lt;/li&gt;
+&lt;li&gt;信号操作Signaling：put-with-signal（&lt;code&gt;nvshmem_TYPE_put_signal&lt;/code&gt;，含非阻塞版）在把数据写到远端后顺带更新一个远端flag，再配合&lt;code&gt;nvshmemx_signal_op&lt;/code&gt;和signal-fetch——这是搭配wait/test做点对点同步的利器，DeepEP那类MoE通信重度依赖它。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;三、同步与排序类（怎么保证&amp;quot;看到&amp;quot;和&amp;quot;完成&amp;quot;）&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;集合通信Collectives：barrier/sync（&lt;code&gt;barrier_all&lt;/code&gt;/&lt;code&gt;sync_all&lt;/code&gt;）、broadcast、fcollect（即allgather）、alltoall，以及归约——sum/prod/min/max/and/or/xor。语义上和NCCL的那套allreduce/allgather/alltoall对得上。&lt;/li&gt;
+&lt;li&gt;点对点同步与内存序：&lt;code&gt;wait_until&lt;/code&gt;（带all/any/some/vector变体）、&lt;code&gt;test&lt;/code&gt;系列、&lt;code&gt;signal_wait_until&lt;/code&gt;用来等远端写入；而&lt;code&gt;nvshmem_fence&lt;/code&gt;负责给一连串put排序、&lt;code&gt;nvshmem_quiet&lt;/code&gt;负责确保它们真正完成。这里有个坑值得在博客里点一句：在CPU上发的fence/quiet只管CPU发起的操作，在GPU上发的只管GPU发起的，两边不互相兜底。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;然后是调用方式轴，也是NVSHMEM区别于纯OpenSHMEM的地方。上面绝大多数功能都同时存在于三种形态：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;主机端（&lt;code&gt;nvshmem_*&lt;/code&gt;）：CPU调用。&lt;/li&gt;
+&lt;li&gt;流序（&lt;code&gt;nvshmemx_*_on_stream&lt;/code&gt;）：CPU把操作按CUDA流的顺序入队，给每个函数末尾多加一个cudaStream_t参数，在GPU上按流序执行。&lt;/li&gt;
+&lt;li&gt;设备端（kernel内直接调）：GPU发起，而且带协作粒度——同一个集合/批量操作有&lt;code&gt;_warp&lt;/code&gt;和&lt;code&gt;_block&lt;/code&gt;两种后缀变体，分别由一个warp或一个线程块里的所有线程协同完成，不带后缀则是单线程粒度。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;它的api复杂程度甚至远超RDMA的verbs，想全记住的人有福了。&lt;/p&gt;
+&lt;h2 id="代码示范"&gt;代码示范
+&lt;/h2&gt;&lt;p&gt;一段典型的NVSHMEM的Helloworld代码如下：&lt;/p&gt;
 &lt;div class="highlight"&gt;&lt;div style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;
 &lt;table style="border-spacing:0;padding:0;margin:0;border:0;"&gt;&lt;tr&gt;&lt;td style="vertical-align:top;padding:0;margin:0;border:0;"&gt;
 &lt;pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"&gt;&lt;code&gt;&lt;span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"&gt; 1
